@@ -335,28 +335,44 @@ async function refreshStatus() {
 }
 
 // ── Workspace files ──
-async function refreshFiles() {
+let currentFilePath = '';
+
+async function refreshFiles(dirPath) {
+  dirPath = dirPath || '';
+  currentFilePath = dirPath;
   try {
-    const resp = await fetch(`${API}/workspace/files`);
+    const url = dirPath
+      ? `${API}/workspace/files?path=${encodeURIComponent(dirPath)}`
+      : `${API}/workspace/files`;
+    const resp = await fetch(url);
     const data = await resp.json();
     if (!data.files || !data.files.length) {
-      fileListEl.innerHTML = '<li style="cursor:default;color:var(--text-dim)">No files</li>';
+      let html = '';
+      if (dirPath) html += `<li onclick="refreshFiles('')" style="color:var(--accent)">&larr; Back</li>`;
+      html += '<li style="cursor:default;color:var(--text-dim)">Empty</li>';
+      fileListEl.innerHTML = html;
       return;
     }
-    fileListEl.innerHTML = data.files.map(f =>
-      `<li onclick="viewFile('${escAttr(f.name)}')">${esc(f.name)}</li>`
-    ).join('');
+    let html = '';
+    if (dirPath) html += `<li onclick="refreshFiles('')" style="color:var(--accent)">&larr; Back</li>`;
+    html += data.files.map(f => {
+      if (f.type === 'directory') {
+        return `<li onclick="refreshFiles('${escAttr(f.path)}')" style="color:var(--accent)">📁 ${esc(f.name)}</li>`;
+      }
+      return `<li onclick="viewFile('${escAttr(f.path)}')">${esc(f.name)}</li>`;
+    }).join('');
+    fileListEl.innerHTML = html;
   } catch {
     fileListEl.innerHTML = '<li style="cursor:default;color:var(--text-dim)">Error</li>';
   }
 }
 
-async function viewFile(name) {
+async function viewFile(filePath) {
   document.getElementById('modal-overlay').classList.add('active');
-  document.getElementById('modal-title').textContent = name;
+  document.getElementById('modal-title').textContent = filePath.split('/').pop();
   document.getElementById('modal-body').textContent = 'Loading…';
   try {
-    const resp = await fetch(`${API}/workspace/files/${encodeURIComponent(name)}`);
+    const resp = await fetch(`${API}/workspace/files/${encodeURIComponent(filePath)}`);
     const data = await resp.json();
     document.getElementById('modal-body').textContent = data.content;
   } catch (e) {

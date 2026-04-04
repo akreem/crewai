@@ -250,12 +250,13 @@ class GoalRequest(BaseModel):
     goal: str
     brief: dict | None = None
     depends_on: list[str] | None = None
+    workspace_dir: str | None = None
 
 
 @app.post("/agent/run")
 async def run_agent(req: GoalRequest):
     try:
-        return await agent.run(req.goal, brief=req.brief, depends_on=req.depends_on)
+        return await agent.run(req.goal, brief=req.brief, depends_on=req.depends_on, workspace_dir=req.workspace_dir)
     except Exception as e:
         import traceback
         traceback.print_exc()

@@ -32,9 +32,10 @@ def create_llm():
     )
 
 
-def read_agent_work(file_path: str) -> dict | None:
+def read_agent_work(file_path: str, workspace: str | None = None) -> dict | None:
     """Read another agent's saved work from the shared workspace."""
-    full_path = file_path if file_path.startswith("/") else os.path.join(WORKSPACE, file_path)
+    ws = workspace or WORKSPACE
+    full_path = file_path if file_path.startswith("/") else os.path.join(ws, file_path)
     if not os.path.exists(full_path):
         return None
     with open(full_path, "r") as f:
@@ -70,6 +71,7 @@ class AgentLoop:
         goal: str,
         brief: dict | None = None,
         depends_on: list[str] | None = None,
+        workspace_dir: str | None = None,
     ) -> dict:
         """
         Execute the full agent loop.
@@ -89,6 +91,9 @@ class AgentLoop:
                 "tool_calls_made": int,
             }
         """
+        # Effective workspace for this run
+        effective_workspace = workspace_dir or WORKSPACE
+
         # Build the user message
         parts = [f"# Mission\n{goal}"]
 
@@ -118,7 +123,7 @@ class AgentLoop:
         # Load referenced agent work from workspace files (not from context payload)
         if depends_on:
             for dep_path in depends_on:
-                dep_data = read_agent_work(dep_path)
+                dep_data = read_agent_work(dep_path, workspace=effective_workspace)
                 if dep_data:
                     agent_name = dep_data.get("agent", "unknown")
                     parts.append(f"\n# Prior Work: {agent_name} ({dep_path})")
@@ -176,7 +181,7 @@ class AgentLoop:
 
                 if fn_name in self.tool_functions:
                     try:
-                        result = await self.tool_functions[fn_name](**args)
+                        result = await self.tool_functions[fn_name](**args, _workspace_dir=effective_workspace)
                     except Exception as e:
                         result = {"error": str(e)}
                 else:
@@ -201,10 +206,10 @@ class AgentLoop:
                 break
 
         # ── Save full work to workspace ──────────────────────────────
-        os.makedirs(WORKSPACE, exist_ok=True)
+        os.makedirs(effective_workspace, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         output_filename = f"{self.name}_{ts}.json"
-        output_path = os.path.join(WORKSPACE, output_filename)
+        output_path = os.path.join(effective_workspace, output_filename)
 
         # key_data = the important structured bits other agents might need
         # (e.g. container list, vulnerability findings) — NOT the full raw dumps

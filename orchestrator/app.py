@@ -342,6 +342,7 @@ async def delegate_to_agent(
     goal: str,
     brief: dict | None = None,
     depends_on: list[str] | None = None,
+    workspace_dir: str | None = None,
     retries: int = 3,
 ) -> dict:
     base_url = AGENTS[agent_name]["url"]
@@ -350,6 +351,8 @@ async def delegate_to_agent(
         payload["brief"] = brief
     if depends_on:
         payload["depends_on"] = depends_on
+    if workspace_dir:
+        payload["workspace_dir"] = workspace_dir
 
     last_error = None
     for attempt in range(1, retries + 1):
@@ -425,6 +428,11 @@ async def chat(req: ChatRequest):
     agent_reports = session["agent_reports"]
     agent_files = session["agent_files"]
 
+    # Create a per-session workspace directory for agent collaboration
+    session_workspace = os.path.join(WORKSPACE_DIR, f"chat_{sid[:8]}")
+    os.makedirs(session_workspace, exist_ok=True)
+    session["workspace_dir"] = session_workspace
+
     # Process tool calls in a loop
     for _ in range(15):
         if not msg.tool_calls:
@@ -440,6 +448,7 @@ async def chat(req: ChatRequest):
                     goal=args["goal"],
                     brief=args.get("brief"),
                     depends_on=args.get("depends_on"),
+                    workspace_dir=session_workspace,
                 )
                 agent_reports.append({"agent": agent_name, **receipt})
                 if receipt.get("output_file"):
@@ -500,6 +509,7 @@ async def chat(req: ChatRequest):
             scribe_receipt = await delegate_to_agent(
                 "scribe", goal=args["goal"],
                 brief=args.get("brief"), depends_on=depends_on,
+                workspace_dir=session_workspace,
             )
             agent_reports.append({"agent": "scribe", **scribe_receipt})
             messages.append(
@@ -635,6 +645,11 @@ async def run_command(req: CommandRequest):
     agent_files: list[str] = []
     plan_text = ""
 
+    # Create a workspace directory for this command
+    cmd_id = str(uuid.uuid4())[:8]
+    cmd_workspace = os.path.join(WORKSPACE_DIR, f"cmd_{cmd_id}")
+    os.makedirs(cmd_workspace, exist_ok=True)
+
     investigation_tools = [t for t in TOOLS if "scribe" not in t["function"]["name"]]
 
     for _ in range(10):
@@ -664,6 +679,7 @@ async def run_command(req: CommandRequest):
                     goal=args["goal"],
                     brief=args.get("brief"),
                     depends_on=args.get("depends_on"),
+                    workspace_dir=cmd_workspace,
                 )
                 agent_reports.append({"agent": agent_name, **receipt})
                 if receipt.get("output_file"):
@@ -721,6 +737,7 @@ async def run_command(req: CommandRequest):
                 goal=args["goal"],
                 brief=args.get("brief"),
                 depends_on=depends_on,
+                workspace_dir=cmd_workspace,
             )
             agent_reports.append({"agent": "scribe", **scribe_receipt})
             messages.append(
@@ -785,31 +802,44 @@ async def health():
 
 
 @app.get("/workspace/files")
-async def list_workspace_files():
-    """List all files in the shared workspace."""
-    files = []
-    if os.path.isdir(WORKSPACE_DIR):
-        for f in sorted(os.listdir(WORKSPACE_DIR)):
+async def list_workspace_files(path: str = ""):
+    """List files and directories in the shared workspace."""
+    # Prevent path traversal
+    safe_path = os.path.normpath(path).lstrip(os.sep).lstrip("/")
+    if ".." in safe_path.split(os.sep):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    target = os.path.join(WORKSPACE_DIR, safe_path) if safe_path else WORKSPACE_DIR
+
+    items = []
+    if os.path.isdir(target):
+        for f in sorted(os.listdir(target)):
             if f.startswith("."):
                 continue
-            fp = os.path.join(WORKSPACE_DIR, f)
-            if os.path.isfile(fp):
-                files.append({
-                    "name": f,
-                    "size": os.path.getsize(fp),
-                    "modified": os.path.getmtime(fp),
-                })
-    return {"files": files}
+            fp = os.path.join(target, f)
+            entry = {
+                "name": f,
+                "path": os.path.join(safe_path, f) if safe_path else f,
+                "modified": os.path.getmtime(fp),
+            }
+            if os.path.isdir(fp):
+                entry["type"] = "directory"
+                entry["size"] = 0
+            else:
+                entry["type"] = "file"
+                entry["size"] = os.path.getsize(fp)
+            items.append(entry)
+    return {"files": items, "current_path": safe_path}
 
 
-@app.get("/workspace/files/{filename}")
-async def read_workspace_file(filename: str):
+@app.get("/workspace/files/{file_path:path}")
+async def read_workspace_file(file_path: str):
     """Read a specific file from the shared workspace."""
     # Prevent path traversal
-    safe_name = os.path.basename(filename)
-    fp = os.path.join(WORKSPACE_DIR, safe_name)
+    safe_path = os.path.normpath(file_path).lstrip(os.sep).lstrip("/")
+    if ".." in safe_path.split(os.sep):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    fp = os.path.join(WORKSPACE_DIR, safe_path)
     if not os.path.isfile(fp):
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="File not found")
     with open(fp, "r", encoding="utf-8", errors="replace") as fh:
-        return {"name": safe_name, "content": fh.read()}
+        return {"name": os.path.basename(safe_path), "path": safe_path, "content": fh.read()}
