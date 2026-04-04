@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sentinel — Command Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #232736;
+    --border: #2e3348;
+    --text: #e1e4ed;
+    --text-dim: #8b8fa7;
+    --accent: #6c8cff;
+    --accent-dim: #3d5afe;
+    --green: #4caf50;
+    --yellow: #ffc107;
+    --red: #f44336;
+    --orange: #ff9800;
+    --radius: 10px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  /* ── Layout ── */
+  .app {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    grid-template-rows: 56px 1fr;
+    height: 100vh;
+  }
+
+  /* ── Header ── */
+  header {
+    grid-column: 1 / -1;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    gap: 16px;
+  }
+  header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: .5px;
+  }
+  header h1 span { color: var(--accent); }
+  .header-status {
+    margin-left: auto;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .status-dot.ok { background: var(--green); }
+  .status-dot.error { background: var(--red); }
+  .status-dot.loading { background: var(--yellow); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .4; } }
+  .agent-badge {
+    font-size: 12px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .sidebar-section {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-section h3 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+  }
+  .agent-list { list-style: none; }
+  .agent-list li {
+    padding: 8px 10px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    margin-bottom: 2px;
+  }
+  .agent-list li .name { flex: 1; }
+  .agent-list li .tag {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--surface2);
+    color: var(--text-dim);
+  }
+
+  /* Workspace file list */
+  .file-list {
+    list-style: none;
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 16px 16px;
+  }
+  .file-list li {
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background .15s;
+  }
+  .file-list li:hover {
+    background: var(--surface2);
+    color: var(--text);
+  }
+
+  /* ── Main ── */
+  main {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Command bar */
+  .command-bar {
+    padding: 20px 24px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .command-input-wrap {
+    display: flex;
+    gap: 10px;
+  }
+  .command-input-wrap input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+    transition: border .2s;
+  }
+  .command-input-wrap input:focus {
+    border-color: var(--accent);
+  }
+  .command-input-wrap input::placeholder {
+    color: var(--text-dim);
+  }
+  .btn {
+    padding: 10px 24px;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background .2s, opacity .2s;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover { background: var(--accent-dim); }
+  .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* Results area */
+  .results {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    gap: 12px;
+  }
+  .empty-state svg { opacity: .3; }
+  .empty-state p { font-size: 14px; }
+
+  /* Cards */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .card-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--text-dim);
+  }
+  .card-header .icon {
+    width: 18px; height: 18px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+  }
+  .card-body {
+    padding: 18px;
+    font-size: 14px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .card-body.mono {
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
+  /* Agent report cards */
+  .agent-card .card-header { color: var(--accent); }
+  .agent-card.watchman .card-header .icon { background: #1b5e20; color: #a5d6a7; }
+  .agent-card.shield .card-header .icon { background: #b71c1c; color: #ef9a9a; }
+  .agent-card.scribe .card-header .icon { background: #e65100; color: #ffcc80; }
+
+  .summary-card .card-header { color: var(--green); }
+  .plan-card .card-header { color: var(--yellow); }
+
+  /* Loading spinner */
+  .loading-bar {
+    display: none;
+    padding: 40px;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 14px;
+  }
+  .loading-bar.active { display: block; }
+  .spinner {
+    width: 32px; height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    margin: 0 auto 12px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* File viewer modal */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.6);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    width: min(800px, 90vw);
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .modal-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .modal-header .close {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 18px;
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+  .modal-header .close:hover { background: var(--surface2); color: var(--text); }
+  .modal-body {
+    padding: 18px;
+    overflow-y: auto;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* History */
+  .history-list {
+    list-style: none;
+    overflow-y: auto;
+    flex: 1;
+    padding: 0 16px 16px;
+  }
+  .history-list li {
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background .15s;
+    margin-bottom: 2px;
+  }
+  .history-list li:hover {
+    background: var(--surface2);
+    color: var(--text);
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Header -->
+  <header>
+    <h1>&#9670; <span>SENTINEL</span> Dashboard</h1>
+    <div class="header-status" id="header-status"></div>
+  </header>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <h3>Agents</h3>
+      <ul class="agent-list" id="agent-list">
+        <li><span class="status-dot loading"></span><span class="name">Watchman</span><span class="tag">SRE</span></li>
+        <li><span class="status-dot loading"></span><span class="name">Shield</span><span class="tag">Security</span></li>
+        <li><span class="status-dot loading"></span><span class="name">Scribe</span><span class="tag">Writer</span></li>
+      </ul>
+    </div>
+
+    <div class="sidebar-section">
+      <h3>Workspace Files</h3>
+    </div>
+    <ul class="file-list" id="file-list">
+      <li style="color:var(--text-dim); cursor:default;">Loading…</li>
+    </ul>
+
+    <div class="sidebar-section">
+      <h3>Command History</h3>
+    </div>
+    <ul class="history-list" id="history-list"></ul>
+  </div>
+
+  <!-- Main -->
+  <main>
+    <div class="command-bar">
+      <div class="command-input-wrap">
+        <input type="text" id="cmd-input" placeholder="Enter a command for the orchestrator…" autocomplete="off" />
+        <button class="btn btn-primary" id="cmd-btn" onclick="sendCommand()">Execute</button>
+      </div>
+    </div>
+
+    <div class="results" id="results">
+      <div class="empty-state" id="empty-state">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        <p>Send a command to get started</p>
+      </div>
+
+      <div class="loading-bar" id="loading">
+        <div class="spinner"></div>
+        <div>Orchestrator is working — delegating to agents…</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:4px;">This may take a minute for complex tasks</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- File viewer modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <span id="modal-title">File</span>
+      <button class="close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-body">Loading…</div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+const cmdInput = document.getElementById('cmd-input');
+const cmdBtn = document.getElementById('cmd-btn');
+const resultsEl = document.getElementById('results');
+const emptyState = document.getElementById('empty-state');
+const loadingEl = document.getElementById('loading');
+const fileListEl = document.getElementById('file-list');
+const historyListEl = document.getElementById('history-list');
+const agentListEl = document.getElementById('agent-list');
+const headerStatus = document.getElementById('header-status');
+
+let commandHistory = JSON.parse(localStorage.getItem('sentinel_history') || '[]');
+
+// ── Keyboard shortcut ──
+cmdInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) sendCommand();
+});
+
+// ── Send command ──
+async function sendCommand() {
+  const cmd = cmdInput.value.trim();
+  if (!cmd) return;
+
+  cmdBtn.disabled = true;
+  emptyState.style.display = 'none';
+  loadingEl.classList.add('active');
+
+  // Clear previous results except loading
+  resultsEl.querySelectorAll('.card').forEach(c => c.remove());
+
+  try {
+    const resp = await fetch(`${API}/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: cmd }),
+    });
+
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    renderResults(data);
+    saveHistory(cmd);
+    refreshFiles();
+  } catch (err) {
+    renderError(err.message);
+  } finally {
+    loadingEl.classList.remove('active');
+    cmdBtn.disabled = false;
+  }
+}
+
+// ── Render results ──
+function renderResults(data) {
+  // Plan
+  if (data.plan) {
+    appendCard('plan-card', 'Plan', '&#9881;', data.plan);
+  }
+
+  // Agent reports
+  if (data.agent_reports) {
+    data.agent_reports.forEach(report => {
+      const agent = report.agent || 'unknown';
+      const cls = `agent-card ${agent}`;
+      let body = '';
+      if (report.error) {
+        body = `ERROR: ${report.error}`;
+      } else {
+        if (report.summary) body += report.summary;
+        if (report.output_file) body += `\n\n📄 Output: ${report.output_file}`;
+        if (report.data) body += `\n\n${JSON.stringify(report.data, null, 2)}`;
+        if (!body) body = JSON.stringify(report, null, 2);
+      }
+      appendCard(cls, `${capitalize(agent)} Report`, agentIcon(agent), body);
+    });
+  }
+
+  // Executive Summary
+  if (data.summary) {
+    appendCard('summary-card', 'Executive Summary', '&#9733;', data.summary);
+  }
+}
+
+function appendCard(cls, title, icon, body) {
+  const card = document.createElement('div');
+  card.className = `card ${cls}`;
+  card.innerHTML = `
+    <div class="card-header"><span class="icon">${icon}</span>${title}</div>
+    <div class="card-body">${escapeHtml(body)}</div>
+  `;
+  resultsEl.appendChild(card);
+}
+
+function renderError(msg) {
+  appendCard('card', 'Error', '&#9888;', msg);
+}
+
+// ── Agent status ──
+async function refreshStatus() {
+  try {
+    const resp = await fetch(`${API}/status`);
+    const data = await resp.json();
+    const agents = ['watchman', 'shield', 'scribe'];
+    const tags = { watchman: 'SRE', shield: 'Security', scribe: 'Writer' };
+    agentListEl.innerHTML = agents.map(a => {
+      const s = data[a];
+      const ok = s && s.status === 'ok';
+      const dotClass = ok ? 'ok' : 'error';
+      return `<li><span class="status-dot ${dotClass}"></span><span class="name">${capitalize(a)}</span><span class="tag">${tags[a]}</span></li>`;
+    }).join('');
+
+    const allOk = agents.every(a => data[a]?.status === 'ok');
+    headerStatus.innerHTML = `<span class="agent-badge"><span class="status-dot ${allOk ? 'ok' : 'error'}"></span>${allOk ? 'All agents online' : 'Some agents offline'}</span>`;
+  } catch {
+    headerStatus.innerHTML = `<span class="agent-badge"><span class="status-dot error"></span>Orchestrator unreachable</span>`;
+  }
+}
+
+// ── Workspace files ──
+async function refreshFiles() {
+  try {
+    const resp = await fetch(`${API}/workspace/files`);
+    const data = await resp.json();
+    if (!data.files || data.files.length === 0) {
+      fileListEl.innerHTML = '<li style="color:var(--text-dim);cursor:default;">No files yet</li>';
+      return;
+    }
+    fileListEl.innerHTML = data.files.map(f =>
+      `<li onclick="viewFile('${escapeAttr(f.name)}')" title="${escapeAttr(f.name)}">${escapeHtml(f.name)}</li>`
+    ).join('');
+  } catch {
+    fileListEl.innerHTML = '<li style="color:var(--text-dim);cursor:default;">Could not load</li>';
+  }
+}
+
+async function viewFile(name) {
+  document.getElementById('modal-overlay').classList.add('active');
+  document.getElementById('modal-title').textContent = name;
+  document.getElementById('modal-body').textContent = 'Loading…';
+  try {
+    const resp = await fetch(`${API}/workspace/files/${encodeURIComponent(name)}`);
+    const data = await resp.json();
+    document.getElementById('modal-body').textContent = data.content;
+  } catch (err) {
+    document.getElementById('modal-body').textContent = `Error: ${err.message}`;
+  }
+}
+
+function closeModal(e) {
+  if (e && e.target !== document.getElementById('modal-overlay')) return;
+  document.getElementById('modal-overlay').classList.remove('active');
+}
+
+// ── Command history ──
+function saveHistory(cmd) {
+  commandHistory.unshift({ cmd, time: new Date().toISOString() });
+  if (commandHistory.length > 50) commandHistory.length = 50;
+  localStorage.setItem('sentinel_history', JSON.stringify(commandHistory));
+  renderHistory();
+}
+
+function renderHistory() {
+  historyListEl.innerHTML = commandHistory.map((h, i) =>
+    `<li onclick="replayHistory(${i})" title="${escapeAttr(h.cmd)}">${escapeHtml(h.cmd)}</li>`
+  ).join('');
+}
+
+function replayHistory(idx) {
+  cmdInput.value = commandHistory[idx].cmd;
+  cmdInput.focus();
+}
+
+// ── Helpers ──
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+function escapeAttr(s) {
+  return (s || '').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+}
+function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+function agentIcon(name) {
+  switch(name) {
+    case 'watchman': return '&#128065;';
+    case 'shield': return '&#128737;';
+    case 'scribe': return '&#128221;';
+    default: return '&#9679;';
+  }
+}
+
+// ── Init ──
+refreshStatus();
+refreshFiles();
+renderHistory();
+setInterval(refreshStatus, 15000);
+setInterval(refreshFiles, 30000);
+</script>
+</body>
+</html>

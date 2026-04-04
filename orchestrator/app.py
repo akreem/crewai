@@ -15,6 +15,7 @@ import json
 import os
 import httpx
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from openai import OpenAI
 
@@ -26,6 +27,13 @@ SHIELD_URL = os.getenv("SHIELD_URL", "http://shield:6002")
 SCRIBE_URL = os.getenv("SCRIBE_URL", "http://scribe:6003")
 
 app = FastAPI(title="Sentinel Orchestrator")
+
+DASHBOARD_PATH = os.getenv("DASHBOARD_PATH", "/app/dashboard/index.html")
+
+
+@app.get("/")
+async def dashboard():
+    return FileResponse(DASHBOARD_PATH, media_type="text/html")
 
 llm = OpenAI(
     base_url="https://openrouter.ai/api/v1",
@@ -366,3 +374,38 @@ async def agent_status():
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "orchestrator"}
+
+
+# ---------------------------------------------------------------------------
+# Workspace file browsing
+# ---------------------------------------------------------------------------
+WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/app/workspace")
+
+
+@app.get("/workspace/files")
+async def list_workspace_files():
+    """List all files in the shared workspace."""
+    files = []
+    if os.path.isdir(WORKSPACE_DIR):
+        for f in sorted(os.listdir(WORKSPACE_DIR)):
+            fp = os.path.join(WORKSPACE_DIR, f)
+            if os.path.isfile(fp):
+                files.append({
+                    "name": f,
+                    "size": os.path.getsize(fp),
+                    "modified": os.path.getmtime(fp),
+                })
+    return {"files": files}
+
+
+@app.get("/workspace/files/{filename}")
+async def read_workspace_file(filename: str):
+    """Read a specific file from the shared workspace."""
+    # Prevent path traversal
+    safe_name = os.path.basename(filename)
+    fp = os.path.join(WORKSPACE_DIR, safe_name)
+    if not os.path.isfile(fp):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="File not found")
+    with open(fp, "r", encoding="utf-8", errors="replace") as fh:
+        return {"name": safe_name, "content": fh.read()}
