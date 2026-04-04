@@ -1,0 +1,71 @@
+services:
+  # ── Orchestrator (LLM brain, delegates to workers via REST) ──
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    ports:
+      - "6000:6000"
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - ORCHESTRATOR_MODEL=${ORCHESTRATOR_MODEL:-qwen/qwen-2.5-72b-instruct}
+      - WATCHMAN_URL=http://watchman:6001
+      - SHIELD_URL=http://shield:6002
+      - SCRIBE_URL=http://scribe:6003
+    volumes:
+      - ./workspace:/app/workspace
+    networks:
+      - sentinel-net
+    depends_on:
+      watchman:
+        condition: service_started
+      shield:
+        condition: service_started
+      scribe:
+        condition: service_started
+
+  # ── Watchman – autonomous system monitoring agent ──
+  watchman:
+    build:
+      context: .
+      dockerfile: watchman/Dockerfile
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - WORKER_LLM_MODEL=${WORKER_LLM_MODEL:-qwen/qwen-2.5-7b-instruct}
+    volumes:
+      - ./workspace:/app/workspace
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - sentinel-net
+
+  # ── Shield – autonomous security scanning agent (nmap, trivy, checkov) ──
+  shield:
+    build:
+      context: .
+      dockerfile: shield/Dockerfile
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - WORKER_LLM_MODEL=${WORKER_LLM_MODEL:-qwen/qwen-2.5-7b-instruct}
+    cap_add:
+      - NET_RAW          # nmap needs raw sockets; avoids full privileged mode
+    volumes:
+      - ./workspace:/app/workspace
+    networks:
+      - sentinel-net
+
+  # ── Scribe – autonomous report generation agent ──
+  scribe:
+    build:
+      context: .
+      dockerfile: scribe/Dockerfile
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - WORKER_LLM_MODEL=${WORKER_LLM_MODEL:-qwen/qwen-2.5-7b-instruct}
+    volumes:
+      - ./workspace:/app/workspace
+    networks:
+      - sentinel-net
+
+networks:
+  sentinel-net:
+    driver: bridge
