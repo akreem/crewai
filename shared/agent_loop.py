@@ -13,6 +13,7 @@ Every worker container uses this same loop:
 
 import json
 import os
+import time
 from datetime import datetime, timezone
 from typing import Callable
 from openai import OpenAI
@@ -26,6 +27,8 @@ def create_llm():
     return OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=OPENROUTER_API_KEY,
+        timeout=120.0,
+        max_retries=2,
     )
 
 
@@ -145,7 +148,19 @@ class AgentLoop:
                 kwargs["tools"] = self.tools_schema
                 kwargs["tool_choice"] = "auto"
 
-            resp = self.llm.chat.completions.create(**kwargs)
+            # LLM call with retry on transient errors
+            resp = None
+            for llm_attempt in range(3):
+                try:
+                    resp = self.llm.chat.completions.create(**kwargs)
+                    break
+                except Exception as e:
+                    print(f"[{self.name}] LLM call attempt {llm_attempt+1} failed: {e}")
+                    if llm_attempt < 2:
+                        time.sleep(3 * (llm_attempt + 1))
+                    else:
+                        raise RuntimeError(f"LLM call failed after 3 attempts: {e}") from e
+
             msg = resp.choices[0].message
             messages.append(msg)
 

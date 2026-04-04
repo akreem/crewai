@@ -13,6 +13,7 @@ The smartest LLM in the system. It does NOT touch tools. Instead it:
 import json
 import os
 import uuid
+import asyncio
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -170,7 +171,7 @@ do great work — not to micromanage how they do it.
 YOUR TEAM:
 • Watchman (SRE Engineer) — tools: psutil, docker-py, container logs, process inspection.
 • Shield (Security Engineer) — tools: nmap, trivy, checkov, SSL/DNS checks.
-• Scribe (Technical Writer) — tools: file writing, JSON export, PDF conversion.
+• Scribe (Technical Writer) — tools: Markdown report writing, JSON export. Scribe ALWAYS runs after investigation agents.
 
 CONVERSATION FLOW — THIS IS CRITICAL:
 You MUST follow this flow with the user. Do NOT skip to execution.
@@ -182,6 +183,7 @@ questions: What exactly do they want? Which targets? What scope? What matters mo
    - What each agent will do
    - What order they'll work in
    - Expected outputs
+   NOTE: Scribe is NEVER optional. Always include Scribe in your plan.
 3. CONFIRM — End your plan with a clear question asking the user to confirm. \
 Something like "Ready to execute this plan? Say **go** to proceed."
 4. EXECUTE — Only when the user explicitly confirms (says go, yes, confirm, proceed, \
@@ -212,8 +214,15 @@ BRIEF WRITING (when you execute):
 COORDINATION:
 • Watchman first → pass output_file to Shield via depends_on.
 • Shield reads Watchman's work to know what to scan.
-• Scribe gets depends_on=[watchman_file, shield_file] to produce reports.
+• Scribe ALWAYS runs last with depends_on=[watchman_file, shield_file] to produce reports.
+• Scribe is MANDATORY — never skip it. The investigation agents return raw data; the Scribe explains and documents it for humans.
 • If a summary mentions something concerning, you can send a follow-up mission.
+
+CRITICAL RULES:
+• NEVER fabricate, invent, or hallucinate data. If an agent returns an error, report the error honestly.
+• If you don't have real data from an agent, say so. Do NOT make up container names, IPs, CVEs, or metrics.
+• Your executive summary must ONLY reference data that actually came back from agents.
+• If all agents failed, your summary should say they failed and suggest retrying.
 
 After all agents report, provide YOUR executive summary as the Tech Lead.
 """
@@ -333,6 +342,7 @@ async def delegate_to_agent(
     goal: str,
     brief: dict | None = None,
     depends_on: list[str] | None = None,
+    retries: int = 3,
 ) -> dict:
     base_url = AGENTS[agent_name]["url"]
     payload: dict = {"goal": goal}
@@ -341,10 +351,23 @@ async def delegate_to_agent(
     if depends_on:
         payload["depends_on"] = depends_on
 
-    async with httpx.AsyncClient(timeout=600.0) as http:
-        r = await http.post(f"{base_url}/agent/run", json=payload)
-        r.raise_for_status()
-        return r.json()
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=600.0) as http:
+                r = await http.post(f"{base_url}/agent/run", json=payload)
+                r.raise_for_status()
+                return r.json()
+        except Exception as e:
+            last_error = e
+            if attempt < retries:
+                wait = attempt * 5  # 5s, 10s
+                print(f"[RETRY] {agent_name} attempt {attempt} failed: {e}. Retrying in {wait}s...")
+                await asyncio.sleep(wait)
+            else:
+                print(f"[FAIL] {agent_name} failed after {retries} attempts: {e}")
+
+    raise last_error
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +465,7 @@ async def chat(req: ChatRequest):
         messages.append(msg)
 
     # ── Documentation phase: Scribe writes up everything ─────────────
+    # Scribe ALWAYS runs — even if some agents failed, it documents what we got
     if agent_files:
         files_list = ", ".join(agent_files)
         scribe_prompt = (
@@ -449,51 +473,74 @@ async def chat(req: ChatRequest):
             "Write a brief for the Scribe to document everything. "
             "Use depends_on to point Scribe at those files."
         )
-        messages.append({"role": "user", "content": scribe_prompt})
-
-        scribe_tools = [t for t in TOOLS if "scribe" in t["function"]["name"]]
-        resp = llm.chat.completions.create(
-            model=ORCHESTRATOR_MODEL,
-            messages=messages,
-            tools=scribe_tools,
-            tool_choice="required",
+    else:
+        scribe_prompt = (
+            "Investigation agents encountered errors and produced no output files. "
+            "Delegate to the Scribe to write an incident report documenting the failures "
+            "and what was attempted. The Scribe should note which agents failed and recommend retrying."
         )
-        msg = resp.choices[0].message
-        messages.append(msg)
+    messages.append({"role": "user", "content": scribe_prompt})
 
-        if msg.tool_calls:
-            tc = msg.tool_calls[0]
-            args = json.loads(tc.function.arguments)
-            depends_on = list(set((args.get("depends_on") or []) + agent_files))
-
-            try:
-                scribe_receipt = await delegate_to_agent(
-                    "scribe", goal=args["goal"],
-                    brief=args.get("brief"), depends_on=depends_on,
-                )
-                agent_reports.append({"agent": "scribe", **scribe_receipt})
-                messages.append(
-                    {"role": "tool", "tool_call_id": tc.id,
-                     "content": json.dumps(scribe_receipt, default=str)}
-                )
-            except Exception as e:
-                agent_reports.append({"agent": "scribe", "error": str(e)})
-
-    # ── Executive summary ────────────────────────────────────────────
-    messages.append({
-        "role": "user",
-        "content": (
-            "All agents have reported and documentation is written. "
-            "Provide your executive summary as Tech Lead. Be concise. "
-            "Highlight the most critical findings and recommended next steps."
-        ),
-    })
+    scribe_tools = [t for t in TOOLS if "scribe" in t["function"]["name"]]
     resp = llm.chat.completions.create(
         model=ORCHESTRATOR_MODEL,
         messages=messages,
+        tools=scribe_tools,
+        tool_choice="required",
     )
-    summary = resp.choices[0].message.content or ""
-    messages.append({"role": "assistant", "content": summary})
+    msg = resp.choices[0].message
+    messages.append(msg)
+
+    if msg.tool_calls:
+        tc = msg.tool_calls[0]
+        args = json.loads(tc.function.arguments)
+        depends_on = list(set((args.get("depends_on") or []) + agent_files))
+
+        try:
+            scribe_receipt = await delegate_to_agent(
+                "scribe", goal=args["goal"],
+                brief=args.get("brief"), depends_on=depends_on,
+            )
+            agent_reports.append({"agent": "scribe", **scribe_receipt})
+            messages.append(
+                {"role": "tool", "tool_call_id": tc.id,
+                 "content": json.dumps(scribe_receipt, default=str)}
+            )
+        except Exception as e:
+            agent_reports.append({"agent": "scribe", "error": str(e)})
+
+    # ── Executive summary ────────────────────────────────────────────
+    # Check if ALL investigation agents failed (no real data at all)
+    investigation_reports = [r for r in agent_reports if r.get("agent") != "scribe"]
+    all_failed = all("error" in r for r in investigation_reports) if investigation_reports else True
+
+    if all_failed and not agent_files:
+        # Don't let the LLM summarize nothing — it will hallucinate
+        failed_agents = [f"{r['agent']}: {r['error']}" for r in investigation_reports if "error" in r]
+        summary = (
+            "**All investigation agents failed.** No real data was collected.\n\n"
+            "**Errors:**\n" + "\n".join(f"- {e}" for e in failed_agents) + "\n\n"
+            "**Recommendation:** Please check agent logs and retry. "
+            "This could be a transient API issue (rate limit, timeout) or a configuration problem."
+        )
+        messages.append({"role": "assistant", "content": summary})
+    else:
+        messages.append({
+            "role": "user",
+            "content": (
+                "All agents have reported and documentation is written. "
+                "Provide your executive summary as Tech Lead. Be concise. "
+                "Highlight the most critical findings and recommended next steps. "
+                "IMPORTANT: Only reference REAL data from agent reports. "
+                "If an agent failed with an error, say so — do NOT invent fake data."
+            ),
+        })
+        resp = llm.chat.completions.create(
+            model=ORCHESTRATOR_MODEL,
+            messages=messages,
+        )
+        summary = resp.choices[0].message.content or ""
+        messages.append({"role": "assistant", "content": summary})
 
     session["phase"] = "done"
     _save_session(sid)
@@ -642,56 +689,74 @@ async def run_command(req: CommandRequest):
             "The Scribe will read the full data directly — you only need to "
             "tell them what to focus on, who the audience is, and what matters most."
         )
-        messages.append({"role": "user", "content": scribe_planning_prompt})
-
-        scribe_tools = [t for t in TOOLS if "scribe" in t["function"]["name"]]
-
-        resp = llm.chat.completions.create(
-            model=ORCHESTRATOR_MODEL,
-            messages=messages,
-            tools=scribe_tools,
-            tool_choice="required",
+    else:
+        scribe_planning_prompt = (
+            "Investigation agents encountered errors and produced no output files. "
+            "Delegate to the Scribe to write an incident report documenting the failures "
+            "and what was attempted. The Scribe should note which agents failed and recommend retrying."
         )
-        msg = resp.choices[0].message
-        messages.append(msg)
+    messages.append({"role": "user", "content": scribe_planning_prompt})
 
-        if msg.tool_calls:
-            tc = msg.tool_calls[0]
-            args = json.loads(tc.function.arguments)
-
-            # Guarantee all agent files are passed even if LLM forgets some
-            depends_on = list(set((args.get("depends_on") or []) + agent_files))
-
-            try:
-                scribe_receipt = await delegate_to_agent(
-                    "scribe",
-                    goal=args["goal"],
-                    brief=args.get("brief"),
-                    depends_on=depends_on,
-                )
-                agent_reports.append({"agent": "scribe", **scribe_receipt})
-                messages.append(
-                    {"role": "tool", "tool_call_id": tc.id,
-                     "content": json.dumps(scribe_receipt, default=str)}
-                )
-            except Exception as e:
-                agent_reports.append({"agent": "scribe", "error": str(e)})
-
-    # ── Phase 3: Executive Summary (Tech Lead wraps up) ───────────────
-    messages.append({
-        "role": "user",
-        "content": (
-            "All agents have reported and documentation is written. "
-            "Provide your executive summary as Tech Lead. Be concise. "
-            "Highlight the most critical findings and recommended next steps."
-        ),
-    })
+    scribe_tools = [t for t in TOOLS if "scribe" in t["function"]["name"]]
 
     resp = llm.chat.completions.create(
         model=ORCHESTRATOR_MODEL,
         messages=messages,
+        tools=scribe_tools,
+        tool_choice="required",
     )
-    summary = resp.choices[0].message.content or ""
+    msg = resp.choices[0].message
+    messages.append(msg)
+
+    if msg.tool_calls:
+        tc = msg.tool_calls[0]
+        args = json.loads(tc.function.arguments)
+
+        # Guarantee all agent files are passed even if LLM forgets some
+        depends_on = list(set((args.get("depends_on") or []) + agent_files))
+
+        try:
+            scribe_receipt = await delegate_to_agent(
+                "scribe",
+                goal=args["goal"],
+                brief=args.get("brief"),
+                depends_on=depends_on,
+            )
+            agent_reports.append({"agent": "scribe", **scribe_receipt})
+            messages.append(
+                {"role": "tool", "tool_call_id": tc.id,
+                 "content": json.dumps(scribe_receipt, default=str)}
+            )
+        except Exception as e:
+            agent_reports.append({"agent": "scribe", "error": str(e)})
+
+    # ── Phase 3: Executive Summary (Tech Lead wraps up) ───────────────
+    investigation_reports = [r for r in agent_reports if r.get("agent") != "scribe"]
+    all_failed = all("error" in r for r in investigation_reports) if investigation_reports else True
+
+    if all_failed and not agent_files:
+        summary = (
+            "**All investigation agents failed.** No real data was collected.\n\n"
+            "**Errors:**\n" + "\n".join(f"- {r['agent']}: {r['error']}" for r in investigation_reports if "error" in r) + "\n\n"
+            "**Recommendation:** Please check agent logs and retry."
+        )
+    else:
+        messages.append({
+            "role": "user",
+            "content": (
+                "All agents have reported and documentation is written. "
+                "Provide your executive summary as Tech Lead. Be concise. "
+                "Highlight the most critical findings and recommended next steps. "
+                "IMPORTANT: Only reference REAL data from agent reports. "
+                "If an agent failed with an error, say so — do NOT invent fake data."
+            ),
+        })
+
+        resp = llm.chat.completions.create(
+            model=ORCHESTRATOR_MODEL,
+            messages=messages,
+        )
+        summary = resp.choices[0].message.content or ""
 
     return CommandResponse(plan=plan_text, agent_reports=agent_reports, summary=summary)
 
