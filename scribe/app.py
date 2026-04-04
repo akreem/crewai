@@ -220,3 +220,22 @@ async def run_agent(req: GoalRequest):
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "scribe"}
+
+
+class ConfigUpdate(BaseModel):
+    api_key: str | None = None
+    model: str | None = None
+
+
+@app.get("/config")
+async def get_config():
+    from shared.agent_loop import get_runtime_config
+    cfg = get_runtime_config()
+    return {"service": "scribe", "model": cfg["model"], "has_api_key": bool(cfg["api_key"])}
+
+
+@app.put("/config")
+async def set_config(req: ConfigUpdate):
+    from shared.agent_loop import update_runtime_config
+    update_runtime_config(api_key=req.api_key, model=req.model)
+    return {"status": "updated"}

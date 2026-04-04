@@ -22,10 +22,33 @@ WORKER_LLM_MODEL = os.getenv("WORKER_LLM_MODEL", os.getenv("LLM_MODEL", "qwen/qw
 WORKSPACE = os.getenv("WORKSPACE_DIR", "/app/workspace")
 
 
+# ---------------------------------------------------------------------------
+# Runtime-mutable config — updated via /config endpoints
+# ---------------------------------------------------------------------------
+_runtime_config = {
+    "api_key": OPENROUTER_API_KEY,
+    "model": WORKER_LLM_MODEL,
+}
+
+
+def get_runtime_config():
+    return dict(_runtime_config)
+
+
+def update_runtime_config(api_key: str | None = None, model: str | None = None):
+    global OPENROUTER_API_KEY, WORKER_LLM_MODEL
+    if api_key is not None:
+        _runtime_config["api_key"] = api_key
+        OPENROUTER_API_KEY = api_key
+    if model is not None:
+        _runtime_config["model"] = model
+        WORKER_LLM_MODEL = model
+
+
 def create_llm():
     return OpenAI(
         base_url="https://openrouter.ai/api/v1",
-        api_key=OPENROUTER_API_KEY,
+        api_key=_runtime_config["api_key"],
     )
 
 
@@ -134,11 +157,14 @@ class AgentLoop:
             {"role": "user", "content": user_msg},
         ]
 
+        # Recreate LLM client each run so API key changes take effect
+        self.llm = create_llm()
+
         all_tool_results: list[dict] = []
 
         for i in range(self.max_iterations):
             kwargs = {
-                "model": WORKER_LLM_MODEL,
+                "model": _runtime_config["model"],
                 "messages": messages,
             }
             if self.tools_schema:

@@ -267,3 +267,22 @@ async def health():
         except Exception:
             tools[tool] = "not found"
     return {"status": "ok", "service": "shield", "tools": tools}
+
+
+class ConfigUpdate(BaseModel):
+    api_key: str | None = None
+    model: str | None = None
+
+
+@app.get("/config")
+async def get_config():
+    from shared.agent_loop import get_runtime_config
+    cfg = get_runtime_config()
+    return {"service": "shield", "model": cfg["model"], "has_api_key": bool(cfg["api_key"])}
+
+
+@app.put("/config")
+async def set_config(req: ConfigUpdate):
+    from shared.agent_loop import update_runtime_config
+    update_runtime_config(api_key=req.api_key, model=req.model)
+    return {"status": "updated"}

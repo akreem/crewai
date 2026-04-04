@@ -26,6 +26,12 @@ WATCHMAN_URL = os.getenv("WATCHMAN_URL", "http://watchman:6001")
 SHIELD_URL = os.getenv("SHIELD_URL", "http://shield:6002")
 SCRIBE_URL = os.getenv("SCRIBE_URL", "http://scribe:6003")
 
+# Runtime-mutable config
+_orch_config = {
+    "api_key": OPENROUTER_API_KEY,
+    "model": ORCHESTRATOR_MODEL,
+}
+
 app = FastAPI(title="Sentinel Orchestrator")
 
 DASHBOARD_PATH = os.getenv("DASHBOARD_PATH", "/app/dashboard/index.html")
@@ -37,7 +43,7 @@ async def dashboard():
 
 llm = OpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_API_KEY,
+    api_key=_orch_config["api_key"],
 )
 
 AGENTS = {
@@ -254,7 +260,7 @@ async def run_command(req: CommandRequest):
 
     for _ in range(10):
         resp = llm.chat.completions.create(
-            model=ORCHESTRATOR_MODEL,
+            model=_orch_config["model"],
             messages=messages,
             tools=investigation_tools,
             tool_choice="auto",
@@ -309,7 +315,7 @@ async def run_command(req: CommandRequest):
         scribe_tools = [t for t in TOOLS if "scribe" in t["function"]["name"]]
 
         resp = llm.chat.completions.create(
-            model=ORCHESTRATOR_MODEL,
+            model=_orch_config["model"],
             messages=messages,
             tools=scribe_tools,
             tool_choice="required",
@@ -350,7 +356,7 @@ async def run_command(req: CommandRequest):
     })
 
     resp = llm.chat.completions.create(
-        model=ORCHESTRATOR_MODEL,
+        model=_orch_config["model"],
         messages=messages,
     )
     summary = resp.choices[0].message.content or ""
@@ -409,3 +415,56 @@ async def read_workspace_file(filename: str):
         raise HTTPException(status_code=404, detail="File not found")
     with open(fp, "r", encoding="utf-8", errors="replace") as fh:
         return {"name": safe_name, "content": fh.read()}
+
+
+# ---------------------------------------------------------------------------
+# Configuration — runtime model & API key management
+# ---------------------------------------------------------------------------
+class ConfigUpdate(BaseModel):
+    api_key: str | None = None
+    model: str | None = None
+
+
+@app.get("/config")
+async def get_all_config():
+    """Get current config for orchestrator + all agents."""
+    global llm
+    result = {
+        "orchestrator": {
+            "model": _orch_config["model"],
+            "has_api_key": bool(_orch_config["api_key"]),
+        }
+    }
+    for name, info in AGENTS.items():
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as http:
+                r = await http.get(f"{info['url']}/config")
+                result[name] = r.json()
+        except Exception as e:
+            result[name] = {"error": str(e)}
+    return result
+
+
+@app.put("/config/{service}")
+async def update_config(service: str, req: ConfigUpdate):
+    """Update config for orchestrator or a specific agent."""
+    global llm
+    if service == "orchestrator":
+        if req.api_key is not None:
+            _orch_config["api_key"] = req.api_key
+            llm = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=req.api_key)
+        if req.model is not None:
+            _orch_config["model"] = req.model
+        return {"status": "updated", "service": "orchestrator"}
+
+    if service not in AGENTS:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Unknown service: {service}")
+
+    async with httpx.AsyncClient(timeout=5.0) as http:
+        r = await http.put(
+            f"{AGENTS[service]['url']}/config",
+            json=req.model_dump(exclude_none=True),
+        )
+        r.raise_for_status()
+        return r.json()
