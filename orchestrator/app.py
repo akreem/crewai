@@ -15,7 +15,7 @@ import os
 import uuid
 import asyncio
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from openai import OpenAI
@@ -488,7 +488,7 @@ async def chat(req: ChatRequest):
             "Delegate to the Scribe to write an incident report documenting the failures "
             "and what was attempted. The Scribe should note which agents failed and recommend retrying."
         )
-    messages.append({"role": "user", "content": scribe_prompt})
+    messages.append({"role": "user", "content": scribe_prompt, "_internal": True})
 
     scribe_tools = [t for t in TOOLS if "scribe" in t["function"]["name"]]
     resp = llm.chat.completions.create(
@@ -537,6 +537,7 @@ async def chat(req: ChatRequest):
     else:
         messages.append({
             "role": "user",
+            "_internal": True,
             "content": (
                 "All agents have reported and documentation is written. "
                 "Provide your executive summary as Tech Lead. Be concise. "
@@ -560,6 +561,210 @@ async def chat(req: ChatRequest):
         phase="done",
         agent_reports=agent_reports,
     )
+
+
+# ---------------------------------------------------------------------------
+# WebSocket — real-time chat with streamed events
+# ---------------------------------------------------------------------------
+async def ws_send(ws: WebSocket, event: str, **data):
+    """Send a typed JSON event over WebSocket."""
+    await ws.send_json({"event": event, **data})
+
+
+@app.websocket("/ws/chat")
+async def ws_chat(ws: WebSocket):
+    await ws.accept()
+    try:
+        while True:
+            raw = await ws.receive_json()
+            user_msg = raw.get("message", "").strip()
+            session_id = raw.get("session_id")
+            if not user_msg:
+                continue
+
+            sid, messages = get_or_create_session(session_id)
+            session = sessions[sid]
+
+            if not session.get("title"):
+                session["title"] = user_msg[:80]
+
+            messages.append({"role": "user", "content": user_msg})
+            _save_session(sid)
+
+            await ws_send(ws, "session", session_id=sid, title=session["title"])
+            await ws_send(ws, "phase", phase="thinking")
+
+            # ── LLM decides: chat or execute ─────────────────────────
+            try:
+                resp = llm.chat.completions.create(
+                    model=ORCHESTRATOR_MODEL,
+                    messages=messages,
+                    tools=TOOLS,
+                    tool_choice="auto",
+                )
+            except Exception as e:
+                await ws_send(ws, "error", message=f"LLM error: {e}")
+                continue
+
+            msg = resp.choices[0].message
+            messages.append(msg)
+
+            # No tool calls → chat reply
+            if not msg.tool_calls:
+                session["phase"] = "chat"
+                _save_session(sid)
+                await ws_send(ws, "reply", content=msg.content or "")
+                await ws_send(ws, "phase", phase="chat")
+                continue
+
+            # ── Execution ─────────────────────────────────────────────
+            session["phase"] = "executing"
+            agent_reports = session["agent_reports"]
+            agent_files = session["agent_files"]
+
+            session_workspace = os.path.join(WORKSPACE_DIR, f"chat_{sid[:8]}")
+            os.makedirs(session_workspace, exist_ok=True)
+            session["workspace_dir"] = session_workspace
+
+            await ws_send(ws, "phase", phase="executing")
+
+            for _ in range(15):
+                if not msg.tool_calls:
+                    break
+
+                for tc in msg.tool_calls:
+                    args = json.loads(tc.function.arguments)
+                    agent_name = TOOL_ROUTING[tc.function.name]
+
+                    await ws_send(ws, "agent_start", agent=agent_name,
+                                  goal=args.get("goal", ""))
+
+                    try:
+                        receipt = await delegate_to_agent(
+                            agent_name,
+                            goal=args["goal"],
+                            brief=args.get("brief"),
+                            depends_on=args.get("depends_on"),
+                            workspace_dir=session_workspace,
+                        )
+                        report = {"agent": agent_name, **receipt}
+                        agent_reports.append(report)
+                        if receipt.get("output_file"):
+                            agent_files.append(receipt["output_file"])
+                        result_str = json.dumps(receipt, default=str)
+                        await ws_send(ws, "agent_done", **report)
+                    except Exception as e:
+                        report = {"agent": agent_name, "error": str(e)}
+                        agent_reports.append(report)
+                        result_str = json.dumps(report)
+                        await ws_send(ws, "agent_done", **report)
+
+                    messages.append(
+                        {"role": "tool", "tool_call_id": tc.id, "content": result_str}
+                    )
+
+                resp = llm.chat.completions.create(
+                    model=ORCHESTRATOR_MODEL,
+                    messages=messages,
+                    tools=TOOLS,
+                    tool_choice="auto",
+                )
+                msg = resp.choices[0].message
+                messages.append(msg)
+
+            # ── Scribe (always) ───────────────────────────────────────
+            await ws_send(ws, "phase", phase="documenting")
+            await ws_send(ws, "agent_start", agent="scribe", goal="Document findings")
+
+            if agent_files:
+                files_list = ", ".join(agent_files)
+                scribe_prompt = (
+                    f"All investigation agents have reported. Their work is saved at: {files_list}\n\n"
+                    "Write a brief for the Scribe to document everything. "
+                    "Use depends_on to point Scribe at those files."
+                )
+            else:
+                scribe_prompt = (
+                    "Investigation agents encountered errors and produced no output files. "
+                    "Delegate to the Scribe to write an incident report documenting the failures."
+                )
+            messages.append({"role": "user", "content": scribe_prompt, "_internal": True})
+
+            scribe_tools = [t for t in TOOLS if "scribe" in t["function"]["name"]]
+            resp = llm.chat.completions.create(
+                model=ORCHESTRATOR_MODEL,
+                messages=messages,
+                tools=scribe_tools,
+                tool_choice="required",
+            )
+            msg = resp.choices[0].message
+            messages.append(msg)
+
+            if msg.tool_calls:
+                tc = msg.tool_calls[0]
+                args = json.loads(tc.function.arguments)
+                depends_on = list(set((args.get("depends_on") or []) + agent_files))
+                try:
+                    scribe_receipt = await delegate_to_agent(
+                        "scribe", goal=args["goal"],
+                        brief=args.get("brief"), depends_on=depends_on,
+                        workspace_dir=session_workspace,
+                    )
+                    report = {"agent": "scribe", **scribe_receipt}
+                    agent_reports.append(report)
+                    messages.append(
+                        {"role": "tool", "tool_call_id": tc.id,
+                         "content": json.dumps(scribe_receipt, default=str)}
+                    )
+                    await ws_send(ws, "agent_done", **report)
+                except Exception as e:
+                    agent_reports.append({"agent": "scribe", "error": str(e)})
+                    await ws_send(ws, "agent_done", agent="scribe", error=str(e))
+
+            # ── Executive summary ─────────────────────────────────────
+            await ws_send(ws, "phase", phase="summarizing")
+
+            investigation_reports = [r for r in agent_reports if r.get("agent") != "scribe"]
+            all_failed = all("error" in r for r in investigation_reports) if investigation_reports else True
+
+            if all_failed and not agent_files:
+                failed_agents = [f"{r['agent']}: {r['error']}" for r in investigation_reports if "error" in r]
+                summary = (
+                    "**All investigation agents failed.** No real data was collected.\n\n"
+                    "**Errors:**\n" + "\n".join(f"- {e}" for e in failed_agents) + "\n\n"
+                    "**Recommendation:** Please check agent logs and retry."
+                )
+                messages.append({"role": "assistant", "content": summary})
+            else:
+                messages.append({
+                    "role": "user", "_internal": True,
+                    "content": (
+                        "All agents have reported and documentation is written. "
+                        "Provide your executive summary as Tech Lead. Be concise. "
+                        "Highlight the most critical findings and recommended next steps. "
+                        "IMPORTANT: Only reference REAL data from agent reports. "
+                        "If an agent failed with an error, say so — do NOT invent fake data."
+                    ),
+                })
+                resp = llm.chat.completions.create(
+                    model=ORCHESTRATOR_MODEL,
+                    messages=messages,
+                )
+                summary = resp.choices[0].message.content or ""
+                messages.append({"role": "assistant", "content": summary})
+
+            session["phase"] = "done"
+            _save_session(sid)
+            await ws_send(ws, "reply", content=summary)
+            await ws_send(ws, "phase", phase="done")
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await ws_send(ws, "error", message=str(e))
+        except:
+            pass
 
 
 @app.get("/chat/sessions")
@@ -599,12 +804,13 @@ async def get_session_messages(session_id: str):
         }
 
     session = sessions[session_id]
-    # Return only user/assistant messages (not system/tool)
+    # Return only user/assistant messages (not system/tool/internal)
     chat_messages = []
     for m in session["messages"]:
         role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
         content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
-        if role in ("user", "assistant") and content:
+        internal = m.get("_internal", False) if isinstance(m, dict) else getattr(m, "_internal", False)
+        if role in ("user", "assistant") and content and not internal:
             chat_messages.append({"role": role, "content": content})
     return {
         "session_id": session_id,
