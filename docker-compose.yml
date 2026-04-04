@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: orchestrator/Dockerfile
     ports:
-      - "6000:6000"
+      - "8080:6000"
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - ORCHESTRATOR_MODEL=${ORCHESTRATOR_MODEL:-qwen/qwen-2.5-72b-instruct}
