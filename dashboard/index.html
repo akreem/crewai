@@ -326,88 +326,6 @@
     white-space: pre-wrap;
     word-break: break-word;
   }
-  .modal-body.settings {
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    font-size: 14px;
-    white-space: normal;
-  }
-
-  /* Settings form */
-  .settings-group {
-    margin-bottom: 20px;
-    padding: 16px;
-    background: var(--bg);
-    border-radius: 8px;
-    border: 1px solid var(--border);
-  }
-  .settings-group h4 {
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: .5px;
-    color: var(--accent);
-    margin-bottom: 12px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .settings-group label {
-    display: block;
-    font-size: 12px;
-    color: var(--text-dim);
-    margin-bottom: 4px;
-    margin-top: 10px;
-  }
-  .settings-group label:first-of-type { margin-top: 0; }
-  .settings-group input[type="text"],
-  .settings-group input[type="password"] {
-    width: 100%;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 8px 12px;
-    color: var(--text);
-    font-size: 13px;
-    outline: none;
-    transition: border .2s;
-  }
-  .settings-group input:focus { border-color: var(--accent); }
-  .settings-group .current-val {
-    font-size: 11px;
-    color: var(--text-dim);
-    margin-top: 2px;
-  }
-  .settings-actions {
-    display: flex;
-    gap: 10px;
-    justify-content: flex-end;
-    margin-top: 16px;
-  }
-  .btn-sm {
-    padding: 6px 16px;
-    font-size: 12px;
-  }
-  .btn-secondary {
-    background: var(--surface2);
-    color: var(--text);
-    border: 1px solid var(--border);
-  }
-  .btn-secondary:hover { background: var(--border); }
-  .toast {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    background: var(--green);
-    color: #fff;
-    padding: 10px 20px;
-    border-radius: 8px;
-    font-size: 13px;
-    z-index: 200;
-    opacity: 0;
-    transform: translateY(10px);
-    transition: all .3s;
-  }
-  .toast.show { opacity: 1; transform: translateY(0); }
-  .toast.error { background: var(--red); }
 
   /* History */
   .history-list {
@@ -446,7 +364,6 @@
   <header>
     <h1>&#9670; <span>SENTINEL</span> Dashboard</h1>
     <div class="header-status" id="header-status"></div>
-    <button class="btn btn-secondary btn-sm" onclick="openSettings()" style="margin-left:8px;">&#9881; Settings</button>
   </header>
 
   <!-- Sidebar -->
@@ -507,60 +424,6 @@
     <div class="modal-body" id="modal-body">Loading…</div>
   </div>
 </div>
-
-<!-- Settings modal -->
-<div class="modal-overlay" id="settings-overlay" onclick="closeSettings(event)">
-  <div class="modal" style="width:min(620px,90vw);" onclick="event.stopPropagation()">
-    <div class="modal-header">
-      &#9881; Configuration
-      <button class="close" onclick="closeSettings()">&times;</button>
-    </div>
-    <div class="modal-body settings" id="settings-body">
-
-      <div class="settings-group">
-        <h4>&#128273; API Key (shared by all services)</h4>
-        <label>OpenRouter API Key</label>
-        <input type="password" id="cfg-api-key" placeholder="sk-or-…" />
-        <div class="current-val" id="cfg-api-key-status"></div>
-      </div>
-
-      <div class="settings-group">
-        <h4>&#9670; Orchestrator</h4>
-        <label>Model</label>
-        <input type="text" id="cfg-model-orchestrator" placeholder="e.g. qwen/qwen-2.5-72b-instruct" />
-        <div class="current-val" id="cfg-current-orchestrator"></div>
-      </div>
-
-      <div class="settings-group">
-        <h4>&#128065; Watchman</h4>
-        <label>Model</label>
-        <input type="text" id="cfg-model-watchman" placeholder="e.g. qwen/qwen-2.5-7b-instruct" />
-        <div class="current-val" id="cfg-current-watchman"></div>
-      </div>
-
-      <div class="settings-group">
-        <h4>&#128737; Shield</h4>
-        <label>Model</label>
-        <input type="text" id="cfg-model-shield" placeholder="e.g. qwen/qwen-2.5-7b-instruct" />
-        <div class="current-val" id="cfg-current-shield"></div>
-      </div>
-
-      <div class="settings-group">
-        <h4>&#128221; Scribe</h4>
-        <label>Model</label>
-        <input type="text" id="cfg-model-scribe" placeholder="e.g. qwen/qwen-2.5-7b-instruct" />
-        <div class="current-val" id="cfg-current-scribe"></div>
-      </div>
-
-      <div class="settings-actions">
-        <button class="btn btn-secondary btn-sm" onclick="closeSettings()">Cancel</button>
-        <button class="btn btn-primary btn-sm" onclick="saveSettings()">Save Changes</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="toast" id="toast"></div>
 
 <script>
 const API = window.location.origin;
@@ -758,89 +621,6 @@ refreshFiles();
 renderHistory();
 setInterval(refreshStatus, 15000);
 setInterval(refreshFiles, 30000);
-
-// ── Settings ──
-async function openSettings() {
-  document.getElementById('settings-overlay').classList.add('active');
-  // Clear inputs
-  document.getElementById('cfg-api-key').value = '';
-  ['orchestrator','watchman','shield','scribe'].forEach(s => {
-    document.getElementById('cfg-model-' + s).value = '';
-  });
-  // Load current config
-  try {
-    const resp = await fetch(`${API}/config`);
-    const data = await resp.json();
-
-    // Orchestrator
-    if (data.orchestrator) {
-      document.getElementById('cfg-current-orchestrator').textContent = 'Current: ' + data.orchestrator.model;
-      document.getElementById('cfg-model-orchestrator').placeholder = data.orchestrator.model;
-      document.getElementById('cfg-api-key-status').textContent = data.orchestrator.has_api_key ? 'API key is set' : 'No API key configured';
-    }
-    // Agents
-    ['watchman','shield','scribe'].forEach(name => {
-      if (data[name] && !data[name].error) {
-        document.getElementById('cfg-current-' + name).textContent = 'Current: ' + data[name].model;
-        document.getElementById('cfg-model-' + name).placeholder = data[name].model;
-      } else {
-        document.getElementById('cfg-current-' + name).textContent = data[name]?.error ? 'Unreachable' : '';
-      }
-    });
-  } catch (err) {
-    showToast('Failed to load config: ' + err.message, true);
-  }
-}
-
-function closeSettings(e) {
-  if (e && e.target !== document.getElementById('settings-overlay')) return;
-  document.getElementById('settings-overlay').classList.remove('active');
-}
-
-async function saveSettings() {
-  const apiKey = document.getElementById('cfg-api-key').value.trim();
-  const services = ['orchestrator', 'watchman', 'shield', 'scribe'];
-  let updated = 0;
-  let errors = [];
-
-  for (const svc of services) {
-    const model = document.getElementById('cfg-model-' + svc).value.trim();
-    // Build payload: include API key for all services, model if changed
-    const payload = {};
-    if (apiKey) payload.api_key = apiKey;
-    if (model) payload.model = model;
-
-    if (Object.keys(payload).length === 0) continue;
-
-    try {
-      const resp = await fetch(`${API}/config/${svc}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      updated++;
-    } catch (err) {
-      errors.push(`${svc}: ${err.message}`);
-    }
-  }
-
-  if (errors.length > 0) {
-    showToast(`Updated ${updated}, failed: ${errors.join('; ')}`, true);
-  } else if (updated > 0) {
-    showToast(`Configuration updated for ${updated} service(s)`);
-    closeSettings();
-  } else {
-    showToast('No changes to save', true);
-  }
-}
-
-function showToast(msg, isError) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.className = 'toast show' + (isError ? ' error' : '');
-  setTimeout(() => { t.className = 'toast'; }, 3000);
-}
 </script>
 </body>
 </html>

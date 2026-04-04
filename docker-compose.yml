@@ -31,7 +31,7 @@ services:
       dockerfile: watchman/Dockerfile
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - WORKER_LLM_MODEL=${WORKER_LLM_MODEL:-qwen/qwen-2.5-7b-instruct}
+      - WORKER_LLM_MODEL=${WATCHMAN_LLM_MODEL:-qwen/qwen-2.5-7b-instruct}
     volumes:
       - ./workspace:/app/workspace
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -45,7 +45,7 @@ services:
       dockerfile: shield/Dockerfile
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - WORKER_LLM_MODEL=${WORKER_LLM_MODEL:-qwen/qwen-2.5-7b-instruct}
+      - WORKER_LLM_MODEL=${SHIELD_LLM_MODEL:-qwen/qwen-2.5-7b-instruct}
     cap_add:
       - NET_RAW          # nmap needs raw sockets; avoids full privileged mode
     volumes:
@@ -60,7 +60,7 @@ services:
       dockerfile: scribe/Dockerfile
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - WORKER_LLM_MODEL=${WORKER_LLM_MODEL:-qwen/qwen-2.5-7b-instruct}
+      - WORKER_LLM_MODEL=${SCRIBE_LLM_MODEL:-qwen/qwen-2.5-7b-instruct}
     volumes:
       - ./workspace:/app/workspace
     networks:
