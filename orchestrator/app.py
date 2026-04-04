@@ -3,18 +3,18 @@ Sentinel Orchestrator — the Tech Lead.
 
 The smartest LLM in the system. It does NOT touch tools. Instead it:
 1. Receives a user command
-2. Thinks strategically about what needs to happen
-3. Crafts detailed briefs for each engineer agent — not step-by-step orders,
-   but strategic context, objectives, suggested approaches, and priorities
-4. Delegates to agents who have the domain expertise to execute
+2. Chats with the user to clarify objectives, scope, targets
+3. Presents a plan and waits for user confirmation
+4. Only THEN delegates to agents
 5. Reviews what comes back, passes intel between agents
 6. Synthesizes a final executive summary
 """
 
 import json
 import os
+import uuid
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from openai import OpenAI
@@ -172,6 +172,25 @@ YOUR TEAM:
 • Shield (Security Engineer) — tools: nmap, trivy, checkov, SSL/DNS checks.
 • Scribe (Technical Writer) — tools: file writing, JSON export, PDF conversion.
 
+CONVERSATION FLOW — THIS IS CRITICAL:
+You MUST follow this flow with the user. Do NOT skip to execution.
+
+1. UNDERSTAND — When the user sends a message, engage in conversation. Ask clarifying \
+questions: What exactly do they want? Which targets? What scope? What matters most?
+2. PLAN — Once you understand the task, present a clear execution plan:
+   - What agents you'll involve and why
+   - What each agent will do
+   - What order they'll work in
+   - Expected outputs
+3. CONFIRM — End your plan with a clear question asking the user to confirm. \
+Something like "Ready to execute this plan? Say **go** to proceed."
+4. EXECUTE — Only when the user explicitly confirms (says go, yes, confirm, proceed, \
+do it, execute, start, run it, let's go, approved, etc.), THEN call the delegation tools.
+
+NEVER call delegation tools before the user confirms. Always chat first.
+If the user just says "hey" or something casual, respond conversationally and ask \
+what they need help with.
+
 HOW COMMUNICATION WORKS:
 Agents save their full work to the shared workspace as JSON files. When you delegate, \
 you get back a RECEIPT: the file path + a short summary. You do NOT get the full data.
@@ -181,9 +200,7 @@ To have one agent build on another's work:
 2. Delegate to Agent B with depends_on=[Agent A's output_file]
    → Agent B reads Agent A's work directly from the workspace
 
-This keeps YOUR context window lean. You only see summaries. Agents see full data.
-
-BRIEF WRITING:
+BRIEF WRITING (when you execute):
 1. Start with WHY — objective and why it matters.
 2. Give strategic context — what prompted this, what the user cares about.
 3. Suggest an approach — but trust them to adapt.
@@ -198,9 +215,114 @@ COORDINATION:
 • Scribe gets depends_on=[watchman_file, shield_file] to produce reports.
 • If a summary mentions something concerning, you can send a follow-up mission.
 
-Scribe ALWAYS runs last to document everything — the system guarantees this.
 After all agents report, provide YOUR executive summary as the Tech Lead.
 """
+
+
+# ---------------------------------------------------------------------------
+# Session store — persisted to workspace volume as JSON
+# ---------------------------------------------------------------------------
+WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/app/workspace")
+SESSIONS_DIR = os.path.join(WORKSPACE_DIR, ".sessions")
+sessions: dict[str, dict] = {}
+
+
+def _session_path(sid: str) -> str:
+    return os.path.join(SESSIONS_DIR, f"{sid}.json")
+
+
+def _save_session(sid: str):
+    """Persist session to disk."""
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
+    session = sessions[sid]
+    # Filter out system messages and non-serializable content for storage
+    saveable_messages = []
+    for m in session["messages"]:
+        if hasattr(m, "model_dump"):
+            d = m.model_dump(exclude_none=True)
+        elif isinstance(m, dict):
+            d = dict(m)
+        else:
+            continue
+        if d.get("role") == "system":
+            continue
+        # Strip tool_calls objects that aren't JSON-friendly
+        if "tool_calls" in d and d["tool_calls"]:
+            d["tool_calls"] = [
+                {"id": tc.get("id", ""), "function": {"name": tc.get("function", {}).get("name", ""), "arguments": tc.get("function", {}).get("arguments", "")}}
+                if isinstance(tc, dict) else
+                {"id": tc.id, "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                for tc in d["tool_calls"]
+            ]
+        saveable_messages.append(d)
+
+    data = {
+        "session_id": sid,
+        "title": session.get("title", ""),
+        "created": session.get("created", ""),
+        "updated": session.get("updated", ""),
+        "phase": session.get("phase", "chat"),
+        "agent_reports": session.get("agent_reports", []),
+        "messages": saveable_messages,
+    }
+    with open(_session_path(sid), "w") as f:
+        json.dump(data, f, indent=2, default=str)
+
+
+def _load_session(sid: str) -> dict | None:
+    """Load session from disk."""
+    path = _session_path(sid)
+    if not os.path.exists(path):
+        return None
+    with open(path, "r") as f:
+        data = json.load(f)
+    return data
+
+
+def _load_all_sessions():
+    """Load session metadata from disk on startup."""
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
+    for fname in os.listdir(SESSIONS_DIR):
+        if not fname.endswith(".json"):
+            continue
+        sid = fname[:-5]
+        if sid in sessions:
+            continue
+        data = _load_session(sid)
+        if data:
+            messages = [{"role": "system", "content": SYSTEM_PROMPT}] + data.get("messages", [])
+            sessions[sid] = {
+                "messages": messages,
+                "agent_reports": data.get("agent_reports", []),
+                "agent_files": [],
+                "phase": data.get("phase", "chat"),
+                "title": data.get("title", ""),
+                "created": data.get("created", ""),
+                "updated": data.get("updated", ""),
+            }
+
+
+# Load existing sessions on startup
+_load_all_sessions()
+
+
+def get_or_create_session(session_id: str | None) -> tuple[str, list]:
+    from datetime import datetime, timezone
+    if session_id and session_id in sessions:
+        sessions[session_id]["updated"] = datetime.now(timezone.utc).isoformat()
+        return session_id, sessions[session_id]["messages"]
+    sid = session_id or str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    sessions[sid] = {
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT}],
+        "agent_reports": [],
+        "agent_files": [],
+        "phase": "chat",
+        "title": "",
+        "created": now,
+        "updated": now,
+    }
+    return sid, sessions[sid]["messages"]
 
 
 # ---------------------------------------------------------------------------
@@ -226,8 +348,224 @@ async def delegate_to_agent(
 
 
 # ---------------------------------------------------------------------------
-# API
+# API — conversational chat with confirm-to-execute
 # ---------------------------------------------------------------------------
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str | None = None
+
+
+class ChatResponse(BaseModel):
+    session_id: str
+    reply: str
+    phase: str            # "chat", "executing", "done"
+    agent_reports: list = []
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest):
+    sid, messages = get_or_create_session(req.session_id)
+    session = sessions[sid]
+
+    # Auto-title from first user message
+    if not session.get("title"):
+        session["title"] = req.message[:80]
+
+    messages.append({"role": "user", "content": req.message})
+    _save_session(sid)
+
+    # ── Chat phase: LLM responds WITHOUT tools ───────────────────────
+    # Let the LLM see the tools so it knows what's possible, but don't
+    # force tool use. The LLM will only call tools after user confirms.
+    resp = llm.chat.completions.create(
+        model=ORCHESTRATOR_MODEL,
+        messages=messages,
+        tools=TOOLS,
+        tool_choice="auto",
+    )
+    msg = resp.choices[0].message
+    messages.append(msg)
+
+    # If no tool calls → just chatting / presenting plan
+    if not msg.tool_calls:
+        session["phase"] = "chat"
+        _save_session(sid)
+        return ChatResponse(
+            session_id=sid,
+            reply=msg.content or "",
+            phase="chat",
+            agent_reports=[],
+        )
+
+    # ── Execution phase: LLM decided to call tools (user confirmed) ──
+    session["phase"] = "executing"
+    agent_reports = session["agent_reports"]
+    agent_files = session["agent_files"]
+
+    # Process tool calls in a loop
+    for _ in range(15):
+        if not msg.tool_calls:
+            break
+
+        for tc in msg.tool_calls:
+            args = json.loads(tc.function.arguments)
+            agent_name = TOOL_ROUTING[tc.function.name]
+
+            try:
+                receipt = await delegate_to_agent(
+                    agent_name,
+                    goal=args["goal"],
+                    brief=args.get("brief"),
+                    depends_on=args.get("depends_on"),
+                )
+                agent_reports.append({"agent": agent_name, **receipt})
+                if receipt.get("output_file"):
+                    agent_files.append(receipt["output_file"])
+                result_str = json.dumps(receipt, default=str)
+            except Exception as e:
+                error_report = {"agent": agent_name, "error": str(e)}
+                agent_reports.append(error_report)
+                result_str = json.dumps(error_report)
+
+            messages.append(
+                {"role": "tool", "tool_call_id": tc.id, "content": result_str}
+            )
+
+        # Let LLM continue (may delegate more or finish)
+        resp = llm.chat.completions.create(
+            model=ORCHESTRATOR_MODEL,
+            messages=messages,
+            tools=TOOLS,
+            tool_choice="auto",
+        )
+        msg = resp.choices[0].message
+        messages.append(msg)
+
+    # ── Documentation phase: Scribe writes up everything ─────────────
+    if agent_files:
+        files_list = ", ".join(agent_files)
+        scribe_prompt = (
+            f"All investigation agents have reported. Their work is saved at: {files_list}\n\n"
+            "Write a brief for the Scribe to document everything. "
+            "Use depends_on to point Scribe at those files."
+        )
+        messages.append({"role": "user", "content": scribe_prompt})
+
+        scribe_tools = [t for t in TOOLS if "scribe" in t["function"]["name"]]
+        resp = llm.chat.completions.create(
+            model=ORCHESTRATOR_MODEL,
+            messages=messages,
+            tools=scribe_tools,
+            tool_choice="required",
+        )
+        msg = resp.choices[0].message
+        messages.append(msg)
+
+        if msg.tool_calls:
+            tc = msg.tool_calls[0]
+            args = json.loads(tc.function.arguments)
+            depends_on = list(set((args.get("depends_on") or []) + agent_files))
+
+            try:
+                scribe_receipt = await delegate_to_agent(
+                    "scribe", goal=args["goal"],
+                    brief=args.get("brief"), depends_on=depends_on,
+                )
+                agent_reports.append({"agent": "scribe", **scribe_receipt})
+                messages.append(
+                    {"role": "tool", "tool_call_id": tc.id,
+                     "content": json.dumps(scribe_receipt, default=str)}
+                )
+            except Exception as e:
+                agent_reports.append({"agent": "scribe", "error": str(e)})
+
+    # ── Executive summary ────────────────────────────────────────────
+    messages.append({
+        "role": "user",
+        "content": (
+            "All agents have reported and documentation is written. "
+            "Provide your executive summary as Tech Lead. Be concise. "
+            "Highlight the most critical findings and recommended next steps."
+        ),
+    })
+    resp = llm.chat.completions.create(
+        model=ORCHESTRATOR_MODEL,
+        messages=messages,
+    )
+    summary = resp.choices[0].message.content or ""
+    messages.append({"role": "assistant", "content": summary})
+
+    session["phase"] = "done"
+    _save_session(sid)
+    return ChatResponse(
+        session_id=sid,
+        reply=summary,
+        phase="done",
+        agent_reports=agent_reports,
+    )
+
+
+@app.get("/chat/sessions")
+async def list_sessions():
+    """List all chat sessions (most recent first)."""
+    _load_all_sessions()
+    result = []
+    for sid, session in sessions.items():
+        result.append({
+            "session_id": sid,
+            "title": session.get("title", "Untitled"),
+            "created": session.get("created", ""),
+            "updated": session.get("updated", ""),
+            "phase": session.get("phase", "chat"),
+        })
+    result.sort(key=lambda s: s.get("updated", ""), reverse=True)
+    return {"sessions": result}
+
+
+@app.get("/chat/{session_id}/messages")
+async def get_session_messages(session_id: str):
+    """Get all messages for a session (for loading a chat)."""
+    if session_id not in sessions:
+        data = _load_session(session_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        # Reconstruct into memory
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + data.get("messages", [])
+        sessions[session_id] = {
+            "messages": messages,
+            "agent_reports": data.get("agent_reports", []),
+            "agent_files": [],
+            "phase": data.get("phase", "chat"),
+            "title": data.get("title", ""),
+            "created": data.get("created", ""),
+            "updated": data.get("updated", ""),
+        }
+
+    session = sessions[session_id]
+    # Return only user/assistant messages (not system/tool)
+    chat_messages = []
+    for m in session["messages"]:
+        role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+        content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
+        if role in ("user", "assistant") and content:
+            chat_messages.append({"role": role, "content": content})
+    return {
+        "session_id": session_id,
+        "title": session.get("title", ""),
+        "phase": session.get("phase", "chat"),
+        "agent_reports": session.get("agent_reports", []),
+        "messages": chat_messages,
+    }
+@app.delete("/chat/{session_id}")
+async def delete_session(session_id: str):
+    sessions.pop(session_id, None)
+    path = _session_path(session_id)
+    if os.path.exists(path):
+        os.remove(path)
+    return {"status": "deleted"}
+
+
+# Keep the old /command endpoint for backward compat
 class CommandRequest(BaseModel):
     command: str
 
@@ -240,16 +578,16 @@ class CommandResponse(BaseModel):
 
 @app.post("/command", response_model=CommandResponse)
 async def run_command(req: CommandRequest):
+    # Legacy: direct execution without chat
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": req.command},
     ]
 
     agent_reports: list[dict] = []
-    agent_files: list[str] = []   # track output file paths for depends_on
+    agent_files: list[str] = []
     plan_text = ""
 
-    # ── Phase 1: Investigation (Watchman + Shield) ────────────────────
     investigation_tools = [t for t in TOOLS if "scribe" not in t["function"]["name"]]
 
     for _ in range(10):
@@ -379,7 +717,6 @@ async def health():
 # ---------------------------------------------------------------------------
 # Workspace file browsing
 # ---------------------------------------------------------------------------
-WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/app/workspace")
 
 
 @app.get("/workspace/files")
@@ -388,6 +725,8 @@ async def list_workspace_files():
     files = []
     if os.path.isdir(WORKSPACE_DIR):
         for f in sorted(os.listdir(WORKSPACE_DIR)):
+            if f.startswith("."):
+                continue
             fp = os.path.join(WORKSPACE_DIR, f)
             if os.path.isfile(fp):
                 files.append({
