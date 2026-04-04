@@ -8,9 +8,8 @@ and how to organize the information for different audiences.
 
 import json
 import os
-import subprocess
 from datetime import datetime, timezone
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from shared.agent_loop import AgentLoop
 
@@ -47,24 +46,6 @@ async def write_json_data(filename: str = "data.json", data: dict = {}, **kwargs
     with open(path, "w") as f:
         json.dump(payload, f, indent=2, default=str)
     return {"written": path, "keys": list(payload.keys())}
-
-
-async def convert_to_pdf(markdown_file: str = "", **kwargs) -> dict:
-    safe_name = os.path.basename(markdown_file)
-    src = os.path.join(WORKSPACE, safe_name)
-    if not os.path.exists(src):
-        return {"error": f"File not found: {src}"}
-    dst = src.replace(".md", ".pdf")
-    try:
-        result = subprocess.run(
-            ["pandoc", src, "-o", dst, "--pdf-engine=weasyprint"],
-            capture_output=True, text=True, timeout=60,
-        )
-        if result.returncode != 0:
-            return {"error": result.stderr[:500]}
-        return {"written": dst}
-    except Exception as e:
-        return {"error": str(e)}
 
 
 async def list_workspace_files(**kwargs) -> dict:
@@ -124,20 +105,6 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
-            "name": "convert_to_pdf",
-            "description": "Convert an existing Markdown file in the workspace to PDF using Pandoc",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "markdown_file": {"type": "string", "description": "Name of the .md file to convert"},
-                },
-                "required": ["markdown_file"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "list_workspace_files",
             "description": "List all files currently in the shared workspace",
             "parameters": {"type": "object", "properties": {}, "required": []},
@@ -162,7 +129,6 @@ TOOLS_SCHEMA = [
 TOOL_FUNCTIONS = {
     "write_markdown_report": write_markdown_report,
     "write_json_data": write_json_data,
-    "convert_to_pdf": convert_to_pdf,
     "list_workspace_files": list_workspace_files,
     "read_workspace_file": read_workspace_file,
 }
@@ -214,7 +180,12 @@ class GoalRequest(BaseModel):
 
 @app.post("/agent/run")
 async def run_agent(req: GoalRequest):
-    return await agent.run(req.goal, brief=req.brief, depends_on=req.depends_on)
+    try:
+        return await agent.run(req.goal, brief=req.brief, depends_on=req.depends_on)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/health")

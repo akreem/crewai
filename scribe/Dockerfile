@@ -4,7 +4,6 @@ WORKDIR /app
 ENV PYTHONPATH=/app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        pandoc \
         git \
     && rm -rf /var/lib/apt/lists/*
 

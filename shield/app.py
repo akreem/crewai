@@ -10,7 +10,7 @@ import subprocess
 import json
 import os
 import re
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from shared.agent_loop import AgentLoop
 
@@ -254,7 +254,12 @@ class GoalRequest(BaseModel):
 
 @app.post("/agent/run")
 async def run_agent(req: GoalRequest):
-    return await agent.run(req.goal, brief=req.brief, depends_on=req.depends_on)
+    try:
+        return await agent.run(req.goal, brief=req.brief, depends_on=req.depends_on)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/health")
