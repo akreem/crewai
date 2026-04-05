@@ -648,11 +648,26 @@ function closeModal(e) {
 function esc(s) { var d = document.createElement('div'); d.textContent = s||''; return d.innerHTML; }
 function ea(s) { return (s||'').replace(/'/g,"&#39;").replace(/"/g,'&quot;'); }
 
+function copyToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text);
+  }
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+  return Promise.resolve();
+}
+
 function copyText(btn) {
   var card = btn.closest('.agent-card') || btn.closest('.msg-row') || btn.closest('.report-card');
   var el = card.querySelector('.agent-card-body') || card.querySelector('.msg-content') || card.querySelector('.report-card-body');
   if (!el) return;
-  navigator.clipboard.writeText(el.textContent).then(function() {
+  copyToClipboard(el.textContent).then(function() {
     btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
     setTimeout(function() {
       btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
