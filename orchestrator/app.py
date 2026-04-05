@@ -19,8 +19,8 @@ import hmac
 import time
 import httpx
 import jwt
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Depends, Cookie
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Cookie
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from openai import OpenAI
 
@@ -46,9 +46,6 @@ def _is_confirmation(text: str) -> bool:
     return bool(_CONFIRM_RE.match(text.strip()))
 
 app = FastAPI(title="Sentinel Orchestrator")
-
-DASHBOARD_PATH = os.getenv("DASHBOARD_PATH", "/app/dashboard/index.html")
-LOGIN_PATH = os.getenv("LOGIN_PATH", "/app/dashboard/login.html")
 
 # -- Auth config --
 AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "sentinel")
@@ -120,28 +117,8 @@ async def auth_middleware(request: Request, call_next):
     token = request.cookies.get("sentinel_token")
     if token and _verify_token(token):
         return await call_next(request)
-    # For API calls return 401, for pages redirect to login
-    if path.startswith("/api/") or path.startswith("/chat/sessions") or path.startswith("/ws/") or path.startswith("/status") or path.startswith("/workspace"):
-        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
-    # Serve login page for unauthenticated page requests
-    if os.path.exists(LOGIN_PATH):
-        return FileResponse(LOGIN_PATH, media_type="text/html")
+    # All unauthenticated API calls get 401 (dashboard handles redirect)
     return JSONResponse({"detail": "Not authenticated"}, status_code=401)
-
-
-@app.get("/login")
-async def login_page():
-    return FileResponse(LOGIN_PATH, media_type="text/html")
-
-
-@app.get("/")
-async def dashboard():
-    return FileResponse(DASHBOARD_PATH, media_type="text/html")
-
-
-@app.get("/chat/{session_id:path}")
-async def dashboard_chat(session_id: str):
-    return FileResponse(DASHBOARD_PATH, media_type="text/html")
 
 llm = OpenAI(
     base_url=ORCHESTRATOR_BASE_URL,

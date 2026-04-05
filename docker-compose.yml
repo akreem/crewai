@@ -1,5 +1,5 @@
 services:
-  # ── Nginx – serves dashboard & reverse proxies API/WS ──
+  # ── Nginx – reverse proxy ──
   nginx:
     build:
       context: .
@@ -9,8 +9,18 @@ services:
     networks:
       - sentinel-net
     depends_on:
+      dashboard:
+        condition: service_started
       orchestrator:
         condition: service_started
+
+  # ── Dashboard – static UI (always responsive) ──
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    networks:
+      - sentinel-net
 
   # ── Orchestrator (LLM brain, delegates to workers via REST) ──
   orchestrator:
