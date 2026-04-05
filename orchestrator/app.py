@@ -524,8 +524,9 @@ async def chat(req: ChatRequest):
     os.makedirs(session_workspace, exist_ok=True)
     session["workspace_dir"] = session_workspace
 
-    # Process tool calls in a loop
-    for _ in range(15):
+    # Process tool calls in a loop — track called agents to prevent duplicates
+    called_agents = set()
+    for _ in range(5):
         if not msg.tool_calls:
             break
 
@@ -533,6 +534,14 @@ async def chat(req: ChatRequest):
             args = json.loads(tc.function.arguments)
             agent_name = TOOL_ROUTING[tc.function.name]
 
+            if agent_name in called_agents:
+                messages.append(
+                    {"role": "tool", "tool_call_id": tc.id,
+                     "content": json.dumps({"skipped": True, "reason": f"{agent_name} already called this session"})}
+                )
+                continue
+
+            called_agents.add(agent_name)
             try:
                 receipt = await delegate_to_agent(
                     agent_name,
@@ -554,11 +563,14 @@ async def chat(req: ChatRequest):
                 {"role": "tool", "tool_call_id": tc.id, "content": result_str}
             )
 
-        # Let LLM continue (may delegate more or finish)
+        # Let LLM continue — only offer tools for agents not yet called
+        remaining_tools = [t for t in TOOLS if TOOL_ROUTING[t["function"]["name"]] not in called_agents]
+        if not remaining_tools:
+            break
         resp = llm.chat.completions.create(
             model=ORCHESTRATOR_MODEL,
             messages=messages,
-            tools=TOOLS,
+            tools=remaining_tools,
             tool_choice="auto",
         )
         msg = resp.choices[0].message
@@ -726,7 +738,8 @@ async def ws_chat(ws: WebSocket):
 
             await ws_send(ws, "phase", phase="executing")
 
-            for _ in range(15):
+            called_agents = set()
+            for _ in range(5):
                 if not msg.tool_calls:
                     break
 
@@ -734,6 +747,14 @@ async def ws_chat(ws: WebSocket):
                     args = json.loads(tc.function.arguments)
                     agent_name = TOOL_ROUTING[tc.function.name]
 
+                    if agent_name in called_agents:
+                        messages.append(
+                            {"role": "tool", "tool_call_id": tc.id,
+                             "content": json.dumps({"skipped": True, "reason": f"{agent_name} already called this session"})}
+                        )
+                        continue
+
+                    called_agents.add(agent_name)
                     await ws_send(ws, "agent_start", agent=agent_name,
                                   goal=args.get("goal", ""))
 
@@ -761,10 +782,13 @@ async def ws_chat(ws: WebSocket):
                         {"role": "tool", "tool_call_id": tc.id, "content": result_str}
                     )
 
+                remaining_tools = [t for t in TOOLS if TOOL_ROUTING[t["function"]["name"]] not in called_agents]
+                if not remaining_tools:
+                    break
                 resp = llm.chat.completions.create(
                     model=ORCHESTRATOR_MODEL,
                     messages=messages,
-                    tools=TOOLS,
+                    tools=remaining_tools,
                     tool_choice="auto",
                 )
                 msg = resp.choices[0].message
@@ -855,10 +879,9 @@ async def ws_chat(ws: WebSocket):
             _save_session(sid)
             await ws_send(ws, "reply", content=summary)
 
-            # Send Scribe's .md report file as downloadable attachment
+            # Send Scribe's .md report files as downloadable attachments
             for r in agent_reports:
                 if r.get("agent") == "scribe" and not r.get("error"):
-                    # Find .md files Scribe created in the session workspace
                     import glob
                     md_files = sorted(glob.glob(os.path.join(session_workspace, "*.md")))
                     for md_path in md_files:

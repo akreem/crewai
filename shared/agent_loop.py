@@ -71,7 +71,7 @@ class AgentLoop:
         system_prompt: str,
         tools_schema: list[dict],
         tool_functions: dict[str, Callable],
-        max_iterations: int = 15,
+        max_iterations: int = 6,
         base_url: str | None = None,
         api_key: str | None = None,
     ):

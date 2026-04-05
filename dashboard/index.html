@@ -778,15 +778,16 @@ function openChat(sid) {
       });
       // Restore scribe report cards if session has agent reports
       if (d.agent_reports) {
+        var seen = {};
         d.agent_reports.forEach(function(r) {
           if (r.agent === 'scribe' && !r.error && r.output_file) {
             var relPath = 'chat_' + sid.substring(0, 8) + '/';
-            // Find .md files from scribe
             fetch(API + '/workspace/files?path=' + encodeURIComponent('chat_' + sid.substring(0, 8)))
               .then(function(resp) { return resp.json(); })
               .then(function(files) {
                 (files.files || []).forEach(function(f) {
-                  if (f.name.endsWith('.md')) {
+                  if (f.name.endsWith('.md') && !seen[f.name]) {
+                    seen[f.name] = true;
                     addScribeReport({ filename: f.name, download_path: relPath + f.name });
                   }
                 });
