@@ -29,6 +29,18 @@ WATCHMAN_URL = os.getenv("WATCHMAN_URL", "http://watchman:6001")
 SHIELD_URL = os.getenv("SHIELD_URL", "http://shield:6002")
 SCRIBE_URL = os.getenv("SCRIBE_URL", "http://scribe:6003")
 
+import re
+_CONFIRM_RE = re.compile(
+    r'^\s*(go+|yes|y|do\s*it|execute|start|proceed|run\s*it|let\'?s\s*go|'
+    r'approved|confirmed?|yep|yeah|ok|okay|sure|absolutely|affirmative|roger)'
+    r'[\s!. ]*$',
+    re.IGNORECASE,
+)
+
+def _is_confirmation(text: str) -> bool:
+    """Check if a user message is a confirmation to execute."""
+    return bool(_CONFIRM_RE.match(text.strip()))
+
 app = FastAPI(title="Sentinel Orchestrator")
 
 DASHBOARD_PATH = os.getenv("DASHBOARD_PATH", "/app/dashboard/index.html")
@@ -409,14 +421,14 @@ async def chat(req: ChatRequest):
     messages.append({"role": "user", "content": req.message})
     _save_session(sid)
 
-    # ── Chat phase: LLM responds WITHOUT tools ───────────────────────
-    # Let the LLM see the tools so it knows what's possible, but don't
-    # force tool use. The LLM will only call tools after user confirms.
+    # ── Chat phase: LLM responds, force tool use on confirmation ──────
+    # If user confirmed ("go", "yes", etc.), force the LLM to call tools
+    confirmed = _is_confirmation(req.message)
     resp = llm.chat.completions.create(
         model=ORCHESTRATOR_MODEL,
         messages=messages,
         tools=TOOLS,
-        tool_choice="auto",
+        tool_choice="required" if confirmed else "auto",
     )
     msg = resp.choices[0].message
     messages.append(msg)
@@ -604,12 +616,14 @@ async def ws_chat(ws: WebSocket):
             await ws_send(ws, "phase", phase="thinking")
 
             # ── LLM decides: chat or execute ─────────────────────────
+            # Force tool calling when user confirms
+            confirmed = _is_confirmation(user_msg)
             try:
                 resp = llm.chat.completions.create(
                     model=ORCHESTRATOR_MODEL,
                     messages=messages,
                     tools=TOOLS,
-                    tool_choice="auto",
+                    tool_choice="required" if confirmed else "auto",
                 )
             except Exception as e:
                 await ws_send(ws, "error", message=f"LLM error: {e}")
