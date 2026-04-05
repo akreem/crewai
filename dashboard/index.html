@@ -810,7 +810,7 @@ function newChat() {
 }
 
 function deleteChat(sid) {
-  fetch(API + '/chat/' + sid, { method: 'DELETE' })
+  fetch(API + '/chat/' + sid + '/delete', { method: 'DELETE' })
     .then(function() {
       if (currentSession === sid) newChat();
       loadSessions();

@@ -931,7 +931,7 @@ async def get_session_messages(session_id: str):
         "agent_reports": session.get("agent_reports", []),
         "messages": chat_messages,
     }
-@app.delete("/chat/{session_id}")
+@app.delete("/chat/{session_id}/delete")
 async def delete_session(session_id: str):
     sessions.pop(session_id, None)
     path = _session_path(session_id)
