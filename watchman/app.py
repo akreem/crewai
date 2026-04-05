@@ -5,6 +5,7 @@ Receives a high-level monitoring goal, reasons about what to check,
 calls local tools, interprets results, and returns a complete analysis.
 """
 
+import os
 import psutil
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
