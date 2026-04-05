@@ -495,7 +495,7 @@ async def chat(req: ChatRequest):
         model=ORCHESTRATOR_MODEL,
         messages=messages,
         tools=scribe_tools,
-        tool_choice="required",
+        tool_choice="auto",
     )
     msg = resp.choices[0].message
     messages.append(msg)
@@ -695,7 +695,7 @@ async def ws_chat(ws: WebSocket):
                 model=ORCHESTRATOR_MODEL,
                 messages=messages,
                 tools=scribe_tools,
-                tool_choice="required",
+                tool_choice="auto",
             )
             msg = resp.choices[0].message
             messages.append(msg)
@@ -925,7 +925,7 @@ async def run_command(req: CommandRequest):
         model=ORCHESTRATOR_MODEL,
         messages=messages,
         tools=scribe_tools,
-        tool_choice="required",
+        tool_choice="auto",
     )
     msg = resp.choices[0].message
     messages.append(msg)

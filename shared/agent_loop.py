@@ -231,14 +231,10 @@ class AgentLoop:
         with open(output_path, "w") as f:
             json.dump(full_output, f, indent=2, default=str)
 
-        # ── Return lightweight receipt ───────────────────────────────
-        # Orchestrator gets a short summary + file path. Not the full payload.
-        # First ~500 chars of analysis as summary for the orchestrator
-        summary = analysis[:500] + ("..." if len(analysis) > 500 else "")
-
+        # ── Return receipt with full analysis ────────────────────────
         return {
             "agent": self.name,
             "output_file": output_filename,
-            "summary": summary,
+            "summary": analysis,
             "tool_calls_made": len(all_tool_results),
         }

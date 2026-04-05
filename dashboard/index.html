@@ -389,12 +389,29 @@ function addUser(text) {
   scrollDown();
 }
 
-function addAssistant(text) {
+function addAssistant(text, animate) {
   var row = document.createElement('div');
   row.className = 'msg-row assistant';
-  row.innerHTML = '<div class="msg-avatar assistant-av">S</div><div class="msg-content">' + esc(text) + '</div>';
+  var content = document.createElement('div');
+  content.className = 'msg-content';
+  row.innerHTML = '<div class="msg-avatar assistant-av">S</div>';
+  row.appendChild(content);
   innerEl.appendChild(row);
-  scrollDown();
+  if (animate !== false) {
+    typeWriter(content, text, 0);
+  } else {
+    content.textContent = text;
+    scrollDown();
+  }
+}
+
+function typeWriter(el, text, i) {
+  if (i < text.length) {
+    var chunk = text.substr(i, 2);
+    el.textContent += chunk;
+    scrollDown();
+    setTimeout(function() { typeWriter(el, text, i + 2); }, 12);
+  }
 }
 
 function addSystem(text) {
@@ -470,7 +487,7 @@ function openChat(sid) {
       innerEl.innerHTML = '';
       (d.messages || []).forEach(function(m) {
         if (m.role === 'user') addUser(m.content);
-        else if (m.role === 'assistant') addAssistant(m.content);
+        else if (m.role === 'assistant') addAssistant(m.content, false);
       });
       loadSessions();
       inputEl.focus();
