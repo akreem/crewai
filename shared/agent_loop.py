@@ -18,15 +18,16 @@ from datetime import datetime, timezone
 from typing import Callable
 from openai import OpenAI
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+DEFAULT_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+DEFAULT_BASE_URL = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
 WORKER_LLM_MODEL = os.getenv("WORKER_LLM_MODEL", os.getenv("LLM_MODEL", "qwen/qwen-2.5-72b-instruct"))
 WORKSPACE = os.getenv("WORKSPACE_DIR", "/app/workspace")
 
 
-def create_llm():
+def create_llm(base_url: str | None = None, api_key: str | None = None):
     return OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=OPENROUTER_API_KEY,
+        base_url=base_url or DEFAULT_BASE_URL,
+        api_key=api_key or DEFAULT_API_KEY,
         timeout=120.0,
         max_retries=2,
     )
@@ -58,13 +59,15 @@ class AgentLoop:
         tools_schema: list[dict],
         tool_functions: dict[str, Callable],
         max_iterations: int = 15,
+        base_url: str | None = None,
+        api_key: str | None = None,
     ):
         self.name = name
         self.system_prompt = system_prompt
         self.tools_schema = tools_schema
         self.tool_functions = tool_functions
         self.max_iterations = max_iterations
-        self.llm = create_llm()
+        self.llm = create_llm(base_url=base_url, api_key=api_key)
 
     async def run(
         self,

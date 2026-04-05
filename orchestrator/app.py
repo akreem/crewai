@@ -22,6 +22,8 @@ from openai import OpenAI
 
 # -- Config --
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+ORCHESTRATOR_API_KEY = os.getenv("ORCHESTRATOR_API_KEY", OPENROUTER_API_KEY)
+ORCHESTRATOR_BASE_URL = os.getenv("ORCHESTRATOR_BASE_URL", os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1"))
 ORCHESTRATOR_MODEL = os.getenv("ORCHESTRATOR_MODEL", os.getenv("LLM_MODEL", "qwen/qwen-2.5-72b-instruct"))
 WATCHMAN_URL = os.getenv("WATCHMAN_URL", "http://watchman:6001")
 SHIELD_URL = os.getenv("SHIELD_URL", "http://shield:6002")
@@ -37,8 +39,8 @@ async def dashboard():
     return FileResponse(DASHBOARD_PATH, media_type="text/html")
 
 llm = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_API_KEY,
+    base_url=ORCHESTRATOR_BASE_URL,
+    api_key=ORCHESTRATOR_API_KEY,
 )
 
 AGENTS = {

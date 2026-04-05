@@ -256,6 +256,8 @@ agent = AgentLoop(
     system_prompt=SYSTEM_PROMPT,
     tools_schema=TOOLS_SCHEMA,
     tool_functions=TOOL_FUNCTIONS,
+    base_url=os.getenv("LLM_BASE_URL"),
+    api_key=os.getenv("LLM_API_KEY"),
 )
 
 
