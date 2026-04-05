@@ -1,11 +1,22 @@
 services:
+  # ── Nginx – serves dashboard & reverse proxies API/WS ──
+  nginx:
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+    ports:
+      - "8080:80"
+    networks:
+      - sentinel-net
+    depends_on:
+      orchestrator:
+        condition: service_started
+
   # ── Orchestrator (LLM brain, delegates to workers via REST) ──
   orchestrator:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
-    ports:
-      - "8080:6000"
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - ORCHESTRATOR_MODEL=${ORCHESTRATOR_MODEL:-qwen/qwen-2.5-72b-instruct}
