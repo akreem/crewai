@@ -11,6 +11,7 @@ Every worker container uses this same loop:
 7. Return a lightweight receipt to the orchestrator (file path + short summary)
 """
 
+import asyncio
 import json
 import os
 import time
@@ -176,9 +177,10 @@ class AgentLoop:
                     resp = self.llm.chat.completions.create(**kwargs)
                     break
                 except Exception as e:
+                    wait = 10 if llm_attempt == 0 else 15
                     print(f"[{self.name}] LLM call attempt {llm_attempt+1} failed: {e}")
                     if llm_attempt < 2:
-                        time.sleep(3 * (llm_attempt + 1))
+                        await asyncio.sleep(wait)
                     else:
                         raise RuntimeError(f"LLM call failed after 3 attempts: {e}") from e
 

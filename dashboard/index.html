@@ -439,6 +439,9 @@ var currentSession = null;
 var sending = false;
 var ws = null;
 var typingEl = null;
+var _timerStart = null;
+var _timerInterval = null;
+var _agentStartTime = null;
 var _$ = function(id) { return document.getElementById(id); };
 var inputEl = _$('input');
 var sendBtn = _$('send-btn');
@@ -481,11 +484,13 @@ function connectWS() {
         break;
       case 'phase':
         if (d.phase === 'thinking') setTyping('Thinking');
-        else if (d.phase === 'executing') setTyping('Executing');
+        else if (d.phase === 'executing') { startTimer(); setTyping('Executing'); }
         else if (d.phase === 'documenting') setTyping('Scribe documenting');
         else if (d.phase === 'summarizing') setTyping('Writing summary');
         else if (d.phase === 'done') {
-          clearTyping(); addSystem('Execution complete');
+          var elapsed = stopTimer();
+          clearTyping();
+          addSystem('Execution complete' + (elapsed ? ' in ' + elapsed : ''));
           unlock(); loadSessions(); refreshFiles();
         } else if (d.phase === 'chat') { clearTyping(); unlock(); }
         break;
@@ -496,10 +501,13 @@ function connectWS() {
         break;
       case 'agent_start':
         clearTyping();
+        _agentStartTime = Date.now();
         setTyping((d.agent||'').toUpperCase() + ' working');
         break;
       case 'agent_done':
-        clearTyping(); addAgentCard(d);
+        var agentElapsed = _agentStartTime ? formatElapsed(Date.now() - _agentStartTime) : null;
+        _agentStartTime = null;
+        clearTyping(); addAgentCard(d, agentElapsed);
         break;
       case 'scribe_report':
         addScribeReport(d);
@@ -691,7 +699,7 @@ function addSystem(text) {
   scrollDown();
 }
 
-function addAgentCard(report) {
+function addAgentCard(report, elapsed) {
   var card = document.createElement('div');
   var hasErr = !!report.error;
   card.className = 'agent-card' + (hasErr ? ' error' : '');
@@ -701,7 +709,8 @@ function addAgentCard(report) {
     if (report.summary) body = report.summary;
     if (report.output_file) body += (body ? '\n' : '') + 'File: ' + report.output_file;
   }
-  var header = '<div class="agent-card-header"><div class="agent-dot"></div><div class="agent-card-name">' + esc((report.agent||'').toUpperCase()) + '</div></div>' +
+  var timeHtml = elapsed ? '<span style="font-size:11px;color:var(--gray-500);font-weight:400;margin-left:auto;">' + esc(elapsed) + '</span>' : '';
+  var header = '<div class="agent-card-header"><div class="agent-dot"></div><div class="agent-card-name">' + esc((report.agent||'').toUpperCase()) + '</div>' + timeHtml + '</div>' +
     '<button class="copy-btn" onclick="copyText(this)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>';
   var needsCollapse = body.length > 500;
   var bodyDiv = document.createElement('div');
@@ -723,12 +732,39 @@ function addAgentCard(report) {
   scrollDown();
 }
 
+function formatElapsed(ms) {
+  var s = Math.floor(ms / 1000);
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60);
+  s = s % 60;
+  return m + 'm ' + (s < 10 ? '0' : '') + s + 's';
+}
+
+function startTimer() {
+  _timerStart = Date.now();
+  if (_timerInterval) clearInterval(_timerInterval);
+  _timerInterval = setInterval(function() {
+    if (!typingEl || !_timerStart) return;
+    var timerSpan = typingEl.querySelector('.typing-timer');
+    if (timerSpan) timerSpan.textContent = formatElapsed(Date.now() - _timerStart);
+  }, 1000);
+}
+
+function stopTimer() {
+  if (_timerInterval) { clearInterval(_timerInterval); _timerInterval = null; }
+  if (!_timerStart) return '';
+  var elapsed = formatElapsed(Date.now() - _timerStart);
+  _timerStart = null;
+  return elapsed;
+}
+
 function setTyping(label) {
   clearTyping();
   var row = document.createElement('div');
   row.className = 'typing-row';
   row.id = 'typing';
-  row.innerHTML = '<div class="msg-avatar assistant-av">S</div><div class="typing-dot-group"><span></span><span></span><span></span></div><div class="typing-label">' + esc(label) + '</div>';
+  var timerHtml = _timerStart ? '<span class="typing-timer" style="color:var(--gray-500);font-size:12px;margin-left:6px;">' + formatElapsed(Date.now() - _timerStart) + '</span>' : '';
+  row.innerHTML = '<div class="msg-avatar assistant-av">S</div><div class="typing-dot-group"><span></span><span></span><span></span></div><div class="typing-label">' + esc(label) + timerHtml + '</div>';
   innerEl.appendChild(row);
   scrollDown();
   typingEl = row;

@@ -577,50 +577,51 @@ async def chat(req: ChatRequest):
         messages.append(msg)
 
     # ── Documentation phase: Scribe writes up everything ─────────────
-    # Scribe ALWAYS runs — even if some agents failed, it documents what we got
-    if agent_files:
-        files_list = ", ".join(agent_files)
-        scribe_prompt = (
-            f"All investigation agents have reported. Their work is saved at: {files_list}\n\n"
-            "Write a brief for the Scribe to document everything. "
-            "Use depends_on to point Scribe at those files."
-        )
-    else:
-        scribe_prompt = (
-            "Investigation agents encountered errors and produced no output files. "
-            "Delegate to the Scribe to write an incident report documenting the failures "
-            "and what was attempted. The Scribe should note which agents failed and recommend retrying."
-        )
-    messages.append({"role": "user", "content": scribe_prompt, "_internal": True})
-
-    scribe_tools = [t for t in TOOLS if "scribe" in t["function"]["name"]]
-    resp = llm.chat.completions.create(
-        model=ORCHESTRATOR_MODEL,
-        messages=messages,
-        tools=scribe_tools,
-        tool_choice="auto",
-    )
-    msg = resp.choices[0].message
-    messages.append(msg)
-
-    if msg.tool_calls:
-        tc = msg.tool_calls[0]
-        args = json.loads(tc.function.arguments)
-        depends_on = list(set((args.get("depends_on") or []) + agent_files))
-
-        try:
-            scribe_receipt = await delegate_to_agent(
-                "scribe", goal=args["goal"],
-                brief=args.get("brief"), depends_on=depends_on,
-                workspace_dir=session_workspace,
+    # Skip if Scribe was already called during the execution loop
+    if "scribe" not in called_agents:
+        if agent_files:
+            files_list = ", ".join(agent_files)
+            scribe_prompt = (
+                f"All investigation agents have reported. Their work is saved at: {files_list}\n\n"
+                "Write a brief for the Scribe to document everything. "
+                "Use depends_on to point Scribe at those files."
             )
-            agent_reports.append({"agent": "scribe", **scribe_receipt})
-            messages.append(
-                {"role": "tool", "tool_call_id": tc.id,
-                 "content": json.dumps(scribe_receipt, default=str)}
+        else:
+            scribe_prompt = (
+                "Investigation agents encountered errors and produced no output files. "
+                "Delegate to the Scribe to write an incident report documenting the failures "
+                "and what was attempted. The Scribe should note which agents failed and recommend retrying."
             )
-        except Exception as e:
-            agent_reports.append({"agent": "scribe", "error": str(e)})
+        messages.append({"role": "user", "content": scribe_prompt, "_internal": True})
+
+        scribe_tools = [t for t in TOOLS if "scribe" in t["function"]["name"]]
+        resp = llm.chat.completions.create(
+            model=ORCHESTRATOR_MODEL,
+            messages=messages,
+            tools=scribe_tools,
+            tool_choice="auto",
+        )
+        msg = resp.choices[0].message
+        messages.append(msg)
+
+        if msg.tool_calls:
+            tc = msg.tool_calls[0]
+            args = json.loads(tc.function.arguments)
+            depends_on = list(set((args.get("depends_on") or []) + agent_files))
+
+            try:
+                scribe_receipt = await delegate_to_agent(
+                    "scribe", goal=args["goal"],
+                    brief=args.get("brief"), depends_on=depends_on,
+                    workspace_dir=session_workspace,
+                )
+                agent_reports.append({"agent": "scribe", **scribe_receipt})
+                messages.append(
+                    {"role": "tool", "tool_call_id": tc.id,
+                     "content": json.dumps(scribe_receipt, default=str)}
+                )
+            except Exception as e:
+                agent_reports.append({"agent": "scribe", "error": str(e)})
 
     # ── Executive summary ────────────────────────────────────────────
     # Check if ALL investigation agents failed (no real data at all)
@@ -638,15 +639,32 @@ async def chat(req: ChatRequest):
         )
         messages.append({"role": "assistant", "content": summary})
     else:
+        # Build an accurate status description for the summary prompt
+        scribe_reports = [r for r in agent_reports if r.get("agent") == "scribe"]
+        scribe_ok = any(not r.get("error") for r in scribe_reports)
+        failed_reports = [r for r in agent_reports if r.get("error")]
+        status_lines = []
+        if failed_reports:
+            for r in failed_reports:
+                status_lines.append(f"- {r['agent'].upper()} FAILED: {r['error']}")
+        summary_context = "All agents have reported."
+        if status_lines:
+            summary_context += " Some agents encountered errors:\n" + "\n".join(status_lines)
+        if scribe_ok:
+            summary_context += "\nScribe has produced documentation."
+        else:
+            summary_context += "\nScribe failed — no documentation was produced."
+
         messages.append({
             "role": "user",
             "_internal": True,
             "content": (
-                "All agents have reported and documentation is written. "
+                f"{summary_context}\n\n"
                 "Provide your executive summary as Tech Lead. Be concise. "
                 "Highlight the most critical findings and recommended next steps. "
                 "IMPORTANT: Only reference REAL data from agent reports. "
-                "If an agent failed with an error, say so — do NOT invent fake data."
+                "If an agent failed with an error, say so — do NOT invent fake data. "
+                "Do NOT claim reports exist if Scribe failed."
             ),
         })
         resp = llm.chat.completions.create(
@@ -794,54 +812,55 @@ async def ws_chat(ws: WebSocket):
                 msg = resp.choices[0].message
                 messages.append(msg)
 
-            # ── Scribe (always) ───────────────────────────────────────
-            await ws_send(ws, "phase", phase="documenting")
-            await ws_send(ws, "agent_start", agent="scribe", goal="Document findings")
+            # ── Scribe (skip if already called) ─────────────────────────
+            if "scribe" not in called_agents:
+                await ws_send(ws, "phase", phase="documenting")
+                await ws_send(ws, "agent_start", agent="scribe", goal="Document findings")
 
-            if agent_files:
-                files_list = ", ".join(agent_files)
-                scribe_prompt = (
-                    f"All investigation agents have reported. Their work is saved at: {files_list}\n\n"
-                    "Write a brief for the Scribe to document everything. "
-                    "Use depends_on to point Scribe at those files."
-                )
-            else:
-                scribe_prompt = (
-                    "Investigation agents encountered errors and produced no output files. "
-                    "Delegate to the Scribe to write an incident report documenting the failures."
-                )
-            messages.append({"role": "user", "content": scribe_prompt, "_internal": True})
-
-            scribe_tools = [t for t in TOOLS if "scribe" in t["function"]["name"]]
-            resp = llm.chat.completions.create(
-                model=ORCHESTRATOR_MODEL,
-                messages=messages,
-                tools=scribe_tools,
-                tool_choice="auto",
-            )
-            msg = resp.choices[0].message
-            messages.append(msg)
-
-            if msg.tool_calls:
-                tc = msg.tool_calls[0]
-                args = json.loads(tc.function.arguments)
-                depends_on = list(set((args.get("depends_on") or []) + agent_files))
-                try:
-                    scribe_receipt = await delegate_to_agent(
-                        "scribe", goal=args["goal"],
-                        brief=args.get("brief"), depends_on=depends_on,
-                        workspace_dir=session_workspace,
+                if agent_files:
+                    files_list = ", ".join(agent_files)
+                    scribe_prompt = (
+                        f"All investigation agents have reported. Their work is saved at: {files_list}\n\n"
+                        "Write a brief for the Scribe to document everything. "
+                        "Use depends_on to point Scribe at those files."
                     )
-                    report = {"agent": "scribe", **scribe_receipt}
-                    agent_reports.append(report)
-                    messages.append(
-                        {"role": "tool", "tool_call_id": tc.id,
-                         "content": json.dumps(scribe_receipt, default=str)}
+                else:
+                    scribe_prompt = (
+                        "Investigation agents encountered errors and produced no output files. "
+                        "Delegate to the Scribe to write an incident report documenting the failures."
                     )
-                    await ws_send(ws, "agent_done", **report)
-                except Exception as e:
-                    agent_reports.append({"agent": "scribe", "error": str(e)})
-                    await ws_send(ws, "agent_done", agent="scribe", error=str(e))
+                messages.append({"role": "user", "content": scribe_prompt, "_internal": True})
+
+                scribe_tools = [t for t in TOOLS if "scribe" in t["function"]["name"]]
+                resp = llm.chat.completions.create(
+                    model=ORCHESTRATOR_MODEL,
+                    messages=messages,
+                    tools=scribe_tools,
+                    tool_choice="auto",
+                )
+                msg = resp.choices[0].message
+                messages.append(msg)
+
+                if msg.tool_calls:
+                    tc = msg.tool_calls[0]
+                    args = json.loads(tc.function.arguments)
+                    depends_on = list(set((args.get("depends_on") or []) + agent_files))
+                    try:
+                        scribe_receipt = await delegate_to_agent(
+                            "scribe", goal=args["goal"],
+                            brief=args.get("brief"), depends_on=depends_on,
+                            workspace_dir=session_workspace,
+                        )
+                        report = {"agent": "scribe", **scribe_receipt}
+                        agent_reports.append(report)
+                        messages.append(
+                            {"role": "tool", "tool_call_id": tc.id,
+                             "content": json.dumps(scribe_receipt, default=str)}
+                        )
+                        await ws_send(ws, "agent_done", **report)
+                    except Exception as e:
+                        agent_reports.append({"agent": "scribe", "error": str(e)})
+                        await ws_send(ws, "agent_done", agent="scribe", error=str(e))
 
             # ── Executive summary ─────────────────────────────────────
             await ws_send(ws, "phase", phase="summarizing")
@@ -858,14 +877,30 @@ async def ws_chat(ws: WebSocket):
                 )
                 messages.append({"role": "assistant", "content": summary})
             else:
+                scribe_reports = [r for r in agent_reports if r.get("agent") == "scribe"]
+                scribe_ok = any(not r.get("error") for r in scribe_reports)
+                failed_reports = [r for r in agent_reports if r.get("error")]
+                status_lines = []
+                if failed_reports:
+                    for r in failed_reports:
+                        status_lines.append(f"- {r['agent'].upper()} FAILED: {r['error']}")
+                summary_context = "All agents have reported."
+                if status_lines:
+                    summary_context += " Some agents encountered errors:\n" + "\n".join(status_lines)
+                if scribe_ok:
+                    summary_context += "\nScribe has produced documentation."
+                else:
+                    summary_context += "\nScribe failed — no documentation was produced."
+
                 messages.append({
                     "role": "user", "_internal": True,
                     "content": (
-                        "All agents have reported and documentation is written. "
+                        f"{summary_context}\n\n"
                         "Provide your executive summary as Tech Lead. Be concise. "
                         "Highlight the most critical findings and recommended next steps. "
                         "IMPORTANT: Only reference REAL data from agent reports. "
-                        "If an agent failed with an error, say so — do NOT invent fake data."
+                        "If an agent failed with an error, say so — do NOT invent fake data. "
+                        "Do NOT claim reports exist if Scribe failed."
                     ),
                 })
                 resp = llm.chat.completions.create(
