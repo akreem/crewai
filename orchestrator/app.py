@@ -14,9 +14,13 @@ import json
 import os
 import uuid
 import asyncio
+import hashlib
+import hmac
+import time
 import httpx
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+import jwt
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Depends, Cookie
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from pydantic import BaseModel
 from openai import OpenAI
 
@@ -44,10 +48,99 @@ def _is_confirmation(text: str) -> bool:
 app = FastAPI(title="Sentinel Orchestrator")
 
 DASHBOARD_PATH = os.getenv("DASHBOARD_PATH", "/app/dashboard/index.html")
+LOGIN_PATH = os.getenv("LOGIN_PATH", "/app/dashboard/login.html")
+
+# -- Auth config --
+AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "sentinel")
+AUTH_SECRET = os.getenv("AUTH_SECRET", hashlib.sha256(AUTH_PASSWORD.encode()).hexdigest())
+AUTH_TOKEN_HOURS = int(os.getenv("AUTH_TOKEN_HOURS", "72"))
+
+# Paths that don't require auth
+_PUBLIC_PATHS = {"/auth/login", "/auth/check", "/health", "/login"}
+
+
+def _create_token() -> str:
+    return jwt.encode(
+        {"exp": int(time.time()) + AUTH_TOKEN_HOURS * 3600, "sub": "user"},
+        AUTH_SECRET,
+        algorithm="HS256",
+    )
+
+
+def _verify_token(token: str) -> bool:
+    try:
+        jwt.decode(token, AUTH_SECRET, algorithms=["HS256"])
+        return True
+    except Exception:
+        return False
+
+
+class LoginRequest(BaseModel):
+    password: str
+
+
+@app.post("/auth/login")
+async def auth_login(req: LoginRequest):
+    if not hmac.compare_digest(req.password, AUTH_PASSWORD):
+        raise HTTPException(status_code=401, detail="Wrong password")
+    token = _create_token()
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(
+        key="sentinel_token",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=AUTH_TOKEN_HOURS * 3600,
+        path="/",
+    )
+    return resp
+
+
+@app.post("/auth/logout")
+async def auth_logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie("sentinel_token", path="/")
+    return resp
+
+
+@app.get("/auth/check")
+async def auth_check(sentinel_token: str = Cookie(None)):
+    if sentinel_token and _verify_token(sentinel_token):
+        return {"authenticated": True}
+    return {"authenticated": False}
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    # Public paths bypass auth
+    if path in _PUBLIC_PATHS or path.startswith("/auth/"):
+        return await call_next(request)
+    # Check cookie
+    token = request.cookies.get("sentinel_token")
+    if token and _verify_token(token):
+        return await call_next(request)
+    # For API calls return 401, for pages redirect to login
+    if path.startswith("/api/") or path.startswith("/chat/sessions") or path.startswith("/ws/") or path.startswith("/status") or path.startswith("/workspace"):
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+    # Serve login page for unauthenticated page requests
+    if os.path.exists(LOGIN_PATH):
+        return FileResponse(LOGIN_PATH, media_type="text/html")
+    return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+
+
+@app.get("/login")
+async def login_page():
+    return FileResponse(LOGIN_PATH, media_type="text/html")
 
 
 @app.get("/")
 async def dashboard():
+    return FileResponse(DASHBOARD_PATH, media_type="text/html")
+
+
+@app.get("/chat/{session_id:path}")
+async def dashboard_chat(session_id: str):
     return FileResponse(DASHBOARD_PATH, media_type="text/html")
 
 llm = OpenAI(
@@ -594,6 +687,11 @@ async def ws_send(ws: WebSocket, event: str, **data):
 
 @app.websocket("/ws/chat")
 async def ws_chat(ws: WebSocket):
+    # Check auth from cookie
+    token = ws.cookies.get("sentinel_token")
+    if not token or not _verify_token(token):
+        await ws.close(code=4001, reason="Not authenticated")
+        return
     await ws.accept()
     try:
         while True:

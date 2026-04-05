@@ -395,6 +395,7 @@
       <span class="dot err"></span>
       <span>Checking agents...</span>
       <button class="llm-check-btn" onclick="checkLLMs()" title="Test LLM connectivity">LLM Check</button>
+      <button class="llm-check-btn" onclick="doLogout()" title="Sign out" style="margin-left:0">Logout</button>
     </div>
   </div>
   <div class="main">
@@ -463,7 +464,11 @@ function toggleSidebar() { sidebarEl.classList.toggle('collapsed'); }
 function connectWS() {
   ws = new WebSocket(WS_URL);
   ws.onopen = function() { console.log('[ws] connected'); };
-  ws.onclose = function() { console.log('[ws] closed'); setTimeout(connectWS, 2000); };
+  ws.onclose = function(e) {
+    console.log('[ws] closed', e.code);
+    if (e.code === 4001) { window.location.href = '/login'; return; }
+    setTimeout(connectWS, 2000);
+  };
   ws.onerror = function() {};
   ws.onmessage = function(evt) {
     var d = JSON.parse(evt.data);
@@ -471,6 +476,7 @@ function connectWS() {
       case 'session':
         currentSession = d.session_id;
         topTitle.textContent = d.title || 'Chat';
+        history.replaceState(null, '', '/chat/' + d.session_id);
         loadSessions();
         break;
       case 'phase':
@@ -764,11 +770,30 @@ function openChat(sid) {
     .then(function(d) {
       currentSession = sid;
       topTitle.textContent = d.title || 'Chat';
+      history.pushState(null, '', '/chat/' + sid);
       innerEl.innerHTML = '';
       (d.messages || []).forEach(function(m) {
         if (m.role === 'user') addUser(m.content);
         else if (m.role === 'assistant') addAssistant(m.content, false);
       });
+      // Restore scribe report cards if session has agent reports
+      if (d.agent_reports) {
+        d.agent_reports.forEach(function(r) {
+          if (r.agent === 'scribe' && !r.error && r.output_file) {
+            var relPath = 'chat_' + sid.substring(0, 8) + '/';
+            // Find .md files from scribe
+            fetch(API + '/workspace/files?path=' + encodeURIComponent('chat_' + sid.substring(0, 8)))
+              .then(function(resp) { return resp.json(); })
+              .then(function(files) {
+                (files.files || []).forEach(function(f) {
+                  if (f.name.endsWith('.md')) {
+                    addScribeReport({ filename: f.name, download_path: relPath + f.name });
+                  }
+                });
+              }).catch(function() {});
+          }
+        });
+      }
       loadSessions();
       inputEl.focus();
     }).catch(function(e) { addSystem('Failed to load chat'); });
@@ -777,6 +802,7 @@ function openChat(sid) {
 function newChat() {
   currentSession = null;
   topTitle.textContent = 'New Chat';
+  history.pushState(null, '', '/');
   innerEl.innerHTML = '';
   innerEl.appendChild(welcomeEl);
   chatListEl.querySelectorAll('li').forEach(function(li) { li.classList.remove('active'); });
@@ -935,6 +961,31 @@ refreshFiles();
 loadSessions();
 setInterval(refreshStatus, 15000);
 setInterval(refreshFiles, 30000);
+
+// Auth: check on load, redirect if not authenticated
+fetch('/auth/check', { credentials: 'same-origin' })
+  .then(function(r) { return r.json(); })
+  .then(function(d) { if (!d.authenticated) window.location.href = '/login'; })
+  .catch(function() {});
+
+function doLogout() {
+  fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' })
+    .then(function() { window.location.href = '/login'; })
+    .catch(function() { window.location.href = '/login'; });
+}
+
+// URL-based chat routing: open chat from /chat/{id}
+(function() {
+  var m = location.pathname.match(/^\/chat\/([a-f0-9-]+)/);
+  if (m) openChat(m[1]);
+})();
+
+// Handle browser back/forward
+window.addEventListener('popstate', function() {
+  var m = location.pathname.match(/^\/chat\/([a-f0-9-]+)/);
+  if (m) openChat(m[1]);
+  else newChat();
+});
 </script>
 </body>
 </html>

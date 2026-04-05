@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sentinel — Login</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
+    background: #171717;
+    color: #eee;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .login-card {
+    width: min(400px, 90vw);
+    background: #212121;
+    border: 1px solid #303030;
+    border-radius: 16px;
+    padding: 40px 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+  }
+  .logo {
+    font-size: 28px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: -0.02em;
+  }
+  .subtitle {
+    font-size: 13px;
+    color: #737373;
+    margin-top: -12px;
+  }
+  .form { width: 100%; display: flex; flex-direction: column; gap: 12px; }
+  .input-group { position: relative; width: 100%; }
+  .input-group input {
+    width: 100%;
+    padding: 12px 14px;
+    background: #303030;
+    border: 1px solid #404040;
+    border-radius: 10px;
+    color: #eee;
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color .2s;
+  }
+  .input-group input::placeholder { color: #525252; }
+  .input-group input:focus { border-color: #737373; }
+  .login-btn {
+    width: 100%;
+    padding: 12px;
+    border-radius: 10px;
+    border: none;
+    background: #fff;
+    color: #000;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: opacity .15s;
+  }
+  .login-btn:hover { opacity: .9; }
+  .login-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .error-msg {
+    font-size: 13px;
+    color: #ef4444;
+    min-height: 18px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="login-card">
+  <div class="logo">Sentinel</div>
+  <div class="subtitle">Enter password to continue</div>
+  <div class="form">
+    <div class="input-group">
+      <input type="password" id="password" placeholder="Password" autofocus>
+    </div>
+    <button class="login-btn" id="login-btn" onclick="doLogin()">Sign in</button>
+    <div class="error-msg" id="error"></div>
+  </div>
+</div>
+<script>
+var passEl = document.getElementById('password');
+var btnEl = document.getElementById('login-btn');
+var errEl = document.getElementById('error');
+
+passEl.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') doLogin();
+});
+
+function doLogin() {
+  var pw = passEl.value.trim();
+  if (!pw) return;
+  btnEl.disabled = true;
+  errEl.textContent = '';
+
+  fetch('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pw }),
+    credentials: 'same-origin'
+  })
+  .then(function(r) {
+    if (r.ok) {
+      window.location.href = '/';
+    } else {
+      return r.json().then(function(d) {
+        errEl.textContent = d.detail || 'Wrong password';
+        btnEl.disabled = false;
+        passEl.select();
+      });
+    }
+  })
+  .catch(function() {
+    errEl.textContent = 'Connection error';
+    btnEl.disabled = false;
+  });
+}
+</script>
+</body>
+</html>

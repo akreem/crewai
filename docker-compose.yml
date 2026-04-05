@@ -22,6 +22,8 @@ services:
       - ORCHESTRATOR_API_KEY=${ORCHESTRATOR_API_KEY:-${OPENROUTER_API_KEY}}
       - ORCHESTRATOR_BASE_URL=${ORCHESTRATOR_BASE_URL:-https://openrouter.ai/api/v1}
       - ORCHESTRATOR_MODEL=${ORCHESTRATOR_MODEL:-qwen/qwen-2.5-72b-instruct}
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-sentinel}
+      - AUTH_SECRET=${AUTH_SECRET:-}
       - WATCHMAN_URL=http://watchman:6001
       - SHIELD_URL=http://shield:6002
       - SCRIBE_URL=http://scribe:6003
