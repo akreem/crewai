@@ -158,13 +158,38 @@
   .msg-avatar.assistant-av { background: var(--gray-800); color: #fff; }
   .msg-content {
     font-size: 14px; line-height: 1.7; color: #e0e0e0;
-    white-space: pre-wrap; word-break: break-word; max-width: 85%;
+    word-break: break-word; max-width: 85%;
   }
   .msg-row.user .msg-content {
     background: var(--gray-800); padding: 10px 16px;
     border-radius: 20px 20px 4px 20px; color: #fff;
+    white-space: pre-wrap;
   }
   .msg-row.assistant .msg-content { color: #d4d4d4; }
+  .msg-content h1, .msg-content h2, .msg-content h3, .msg-content h4 {
+    color: #fff; margin: 12px 0 6px; line-height: 1.3;
+  }
+  .msg-content h1 { font-size: 20px; }
+  .msg-content h2 { font-size: 17px; }
+  .msg-content h3 { font-size: 15px; }
+  .msg-content h4 { font-size: 14px; }
+  .msg-content p { margin: 6px 0; }
+  .msg-content ul, .msg-content ol { margin: 6px 0; padding-left: 22px; }
+  .msg-content li { margin: 3px 0; }
+  .msg-content strong { color: #fff; font-weight: 600; }
+  .msg-content em { font-style: italic; color: var(--gray-300); }
+  .msg-content code {
+    background: var(--gray-800); padding: 1px 5px; border-radius: 4px;
+    font-family: 'Cascadia Code','Fira Code','Consolas',monospace;
+    font-size: 12.5px;
+  }
+  .msg-content pre {
+    background: var(--gray-900); border: 1px solid var(--gray-800);
+    border-radius: 8px; padding: 12px; margin: 8px 0;
+    overflow-x: auto; font-size: 12.5px; line-height: 1.5;
+  }
+  .msg-content pre code { background: none; padding: 0; }
+  .msg-content hr { border: none; border-top: 1px solid var(--gray-800); margin: 12px 0; }
   .system-msg { text-align: center; font-size: 12px; color: var(--gray-500); padding: 4px 0; }
   .agent-card {
     background: var(--gray-900); border: 1px solid var(--gray-800);
@@ -546,9 +571,9 @@ function addAssistant(text, animate) {
   content.appendChild(textNode);
   var clean = plainText.trim();
   if (animate !== false && clean) {
-    typeWriter(textNode, clean, 0);
+    typeWriterMd(textNode, clean, 0);
   } else {
-    textNode.textContent = clean;
+    textNode.innerHTML = renderMarkdown(clean);
     scrollDown();
   }
 }
@@ -578,6 +603,78 @@ function typeWriter(el, text, i) {
     scrollDown();
     setTimeout(function() { typeWriter(el, text, i + 24); }, 12);
   }
+}
+
+function typeWriterMd(el, text, i) {
+  if (i < text.length) {
+    var chunk = text.substr(0, i + 24);
+    el.innerHTML = renderMarkdown(chunk);
+    scrollDown();
+    if (i + 24 < text.length) {
+      setTimeout(function() { typeWriterMd(el, text, i + 24); }, 12);
+    }
+  }
+}
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  var html = text;
+  // Escape HTML
+  html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Code blocks (``` ... ```)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(m, lang, code) {
+    return '<pre><code>' + code.trim() + '</code></pre>';
+  });
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Headings
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  // Horizontal rules
+  html = html.replace(/^---$/gm, '<hr>');
+  // Bold + italic
+  html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  // Bold
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // Unordered lists (*, -, •) with nesting support
+  html = html.replace(/^([ \t]*)\*[ \t]+(.+)$/gm, function(m, indent, item) {
+    return '<li>' + item + '</li>';
+  });
+  html = html.replace(/^([ \t]*)-[ \t]+(.+)$/gm, function(m, indent, item) {
+    return '<li>' + item + '</li>';
+  });
+  // Wrap consecutive <li> in <ul>
+  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+  // Ordered lists
+  html = html.replace(/^\d+\.[ \t]+(.+)$/gm, '<li>$1</li>');
+  html = html.replace(/((?:<li>.*<\/li>\n?){2,})/g, function(match) {
+    if (match.indexOf('<ul>') === -1) return '<ol>' + match + '</ol>';
+    return match;
+  });
+  // LaTeX-style $\text{...}$ — render as plain text
+  html = html.replace(/\$\\text\{([^}]+)\}\$/g, '$1');
+  // Paragraphs: double newlines
+  html = html.replace(/\n\n+/g, '</p><p>');
+  // Single newlines to <br> (but not inside block elements)
+  html = html.replace(/([^>])\n([^<])/g, '$1<br>$2');
+  html = '<p>' + html + '</p>';
+  // Clean up empty paragraphs and fix block elements inside p
+  html = html.replace(/<p><\/p>/g, '');
+  html = html.replace(/<p>(<h[1-4]>)/g, '$1');
+  html = html.replace(/(<\/h[1-4]>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<ul>)/g, '$1');
+  html = html.replace(/(<\/ul>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<ol>)/g, '$1');
+  html = html.replace(/(<\/ol>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<pre>)/g, '$1');
+  html = html.replace(/(<\/pre>)<\/p>/g, '$1');
+  html = html.replace(/<p>(<hr>)/g, '$1');
+  html = html.replace(/(<hr>)<\/p>/g, '$1');
+  return html;
 }
 
 function addSystem(text) {
