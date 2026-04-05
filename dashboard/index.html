@@ -185,6 +185,33 @@
     display: flex; gap: 6px; margin-top: 10px; padding-top: 8px;
     border-top: 1px solid var(--gray-800);
   }
+  .copy-btn {
+    background: none; border: none; color: var(--gray-500);
+    cursor: pointer; padding: 2px 4px; border-radius: 4px;
+    display: flex; align-items: center; gap: 4px;
+    font-size: 11px; transition: color .15s;
+  }
+  .copy-btn:hover { color: #fff; }
+  .msg-row.assistant { position: relative; }
+  .msg-row.assistant .msg-actions {
+    display: flex; gap: 4px; margin-top: 4px; opacity: 0;
+    transition: opacity .15s;
+  }
+  .msg-row.assistant:hover .msg-actions { opacity: 1; }
+  .agent-card { position: relative; }
+  .agent-card .copy-btn {
+    position: absolute; top: 12px; right: 12px;
+    opacity: 0; transition: opacity .15s;
+  }
+  .agent-card:hover .copy-btn { opacity: 1; }
+  .agent-action-btn {
+    background: var(--gray-800); border: 1px solid var(--gray-700);
+    color: var(--gray-300); padding: 6px 12px;
+    border-radius: 8px; font-size: 12px; font-weight: 500;
+    cursor: pointer; display: inline-flex;
+    align-items: center; gap: 6px; transition: background .15s, color .15s;
+  }
+  .agent-action-btn:hover { background: var(--gray-700); color: #fff; }
   .see-more {
     display: inline-block; margin-top: 6px;
     font-size: 12px; font-weight: 600; color: var(--gray-400);
@@ -435,6 +462,10 @@ function addAssistant(text, animate) {
   row.innerHTML = '<div class="msg-avatar assistant-av">S</div>';
   row.appendChild(content);
   innerEl.appendChild(row);
+  var actions = document.createElement('div');
+  actions.className = 'msg-actions';
+  actions.innerHTML = '<button class="copy-btn" onclick="copyText(this)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>';
+  row.appendChild(actions);
   if (animate !== false) {
     typeWriter(content, text, 0);
   } else {
@@ -470,7 +501,8 @@ function addAgentCard(report) {
     if (report.summary) body = report.summary;
     if (report.output_file) body += (body ? '\n' : '') + 'File: ' + report.output_file;
   }
-  var header = '<div class="agent-card-header"><div class="agent-dot"></div><div class="agent-card-name">' + esc((report.agent||'').toUpperCase()) + '</div></div>';
+  var header = '<div class="agent-card-header"><div class="agent-dot"></div><div class="agent-card-name">' + esc((report.agent||'').toUpperCase()) + '</div></div>' +
+    '<button class="copy-btn" onclick="copyText(this)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>';
   var needsCollapse = body.length > 500;
   var bodyDiv = document.createElement('div');
   bodyDiv.className = 'agent-card-body' + (needsCollapse ? ' collapsed' : '');
@@ -615,6 +647,18 @@ function closeModal(e) {
 
 function esc(s) { var d = document.createElement('div'); d.textContent = s||''; return d.innerHTML; }
 function ea(s) { return (s||'').replace(/'/g,"&#39;").replace(/"/g,'&quot;'); }
+
+function copyText(btn) {
+  var card = btn.closest('.agent-card') || btn.closest('.msg-row') || btn.closest('.report-card');
+  var el = card.querySelector('.agent-card-body') || card.querySelector('.msg-content') || card.querySelector('.report-card-body');
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent).then(function() {
+    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+    setTimeout(function() {
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+    }, 1500);
+  });
+}
 
 function addScribeReport(d) {
   var card = document.createElement('div');
