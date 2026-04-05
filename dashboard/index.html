@@ -219,6 +219,31 @@
     padding: 0; transition: color .15s;
   }
   .see-more:hover { color: #fff; }
+  .thought-block {
+    background: var(--gray-900); border: 1px solid var(--gray-800);
+    border-radius: 10px; margin-bottom: 10px; overflow: hidden;
+  }
+  .thought-toggle {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; padding: 8px 12px;
+    background: none; border: none; cursor: pointer;
+    color: var(--gray-500); font-size: 12px; font-weight: 500;
+    font-family: inherit; transition: color .15s;
+  }
+  .thought-toggle:hover { color: var(--gray-300); }
+  .thought-toggle svg {
+    width: 14px; height: 14px; flex-shrink: 0;
+    transition: transform .2s;
+  }
+  .thought-toggle.open svg { transform: rotate(90deg); }
+  .thought-toggle .thought-label { flex: 1; text-align: left; }
+  .thought-body {
+    display: none; padding: 0 14px 10px;
+    font-size: 12.5px; line-height: 1.65; color: var(--gray-500);
+    white-space: pre-wrap; word-break: break-word;
+    border-top: 1px solid var(--gray-800);
+  }
+  .thought-body.open { display: block; }
   .welcome {
     flex: 1; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
@@ -466,12 +491,59 @@ function addAssistant(text, animate) {
   actions.className = 'msg-actions';
   actions.innerHTML = '<button class="copy-btn" onclick="copyText(this)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>';
   row.appendChild(actions);
-  if (animate !== false) {
-    typeWriter(content, text, 0);
+
+  // Parse <thought> tags
+  var parts = parseThoughts(text);
+  var plainText = '';
+  parts.forEach(function(part) {
+    if (part.type === 'thought') {
+      var block = document.createElement('div');
+      block.className = 'thought-block';
+      var toggle = document.createElement('button');
+      toggle.className = 'thought-toggle';
+      toggle.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg><span class="thought-label">Thought process</span>';
+      var body = document.createElement('div');
+      body.className = 'thought-body';
+      body.textContent = part.text.trim();
+      toggle.onclick = function() {
+        toggle.classList.toggle('open');
+        body.classList.toggle('open');
+      };
+      block.appendChild(toggle);
+      block.appendChild(body);
+      content.appendChild(block);
+    } else {
+      plainText += part.text;
+    }
+  });
+
+  var textNode = document.createElement('span');
+  content.appendChild(textNode);
+  var clean = plainText.trim();
+  if (animate !== false && clean) {
+    typeWriter(textNode, clean, 0);
   } else {
-    content.textContent = text;
+    textNode.textContent = clean;
     scrollDown();
   }
+}
+
+function parseThoughts(text) {
+  var parts = [];
+  var re = /<thought>([\s\S]*?)<\/thought>/gi;
+  var last = 0;
+  var match;
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > last) {
+      parts.push({ type: 'text', text: text.substring(last, match.index) });
+    }
+    parts.push({ type: 'thought', text: match[1] });
+    last = re.lastIndex;
+  }
+  if (last < text.length) {
+    parts.push({ type: 'text', text: text.substring(last) });
+  }
+  return parts;
 }
 
 function typeWriter(el, text, i) {
