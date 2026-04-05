@@ -756,6 +756,16 @@ async def ws_chat(ws: WebSocket):
             session["phase"] = "done"
             _save_session(sid)
             await ws_send(ws, "reply", content=summary)
+
+            # Send Scribe's report file as downloadable attachment
+            for r in agent_reports:
+                if r.get("agent") == "scribe" and r.get("output_file") and not r.get("error"):
+                    # Build the workspace-relative path for the download URL
+                    rel_path = f"chat_{sid[:8]}/{r['output_file']}"
+                    await ws_send(ws, "scribe_report",
+                                  filename=r["output_file"],
+                                  download_path=rel_path)
+
             await ws_send(ws, "phase", phase="done")
 
     except WebSocketDisconnect:
@@ -1049,3 +1059,15 @@ async def read_workspace_file(file_path: str):
         raise HTTPException(status_code=404, detail="File not found")
     with open(fp, "r", encoding="utf-8", errors="replace") as fh:
         return {"name": os.path.basename(safe_path), "path": safe_path, "content": fh.read()}
+
+
+@app.get("/workspace/download/{file_path:path}")
+async def download_workspace_file(file_path: str):
+    """Download a file from the workspace."""
+    safe_path = os.path.normpath(file_path).lstrip(os.sep).lstrip("/")
+    if ".." in safe_path.split(os.sep):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    fp = os.path.join(WORKSPACE_DIR, safe_path)
+    if not os.path.isfile(fp):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(fp, filename=os.path.basename(safe_path), media_type="application/octet-stream")
