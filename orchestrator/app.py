@@ -757,14 +757,18 @@ async def ws_chat(ws: WebSocket):
             _save_session(sid)
             await ws_send(ws, "reply", content=summary)
 
-            # Send Scribe's report file as downloadable attachment
+            # Send Scribe's .md report file as downloadable attachment
             for r in agent_reports:
-                if r.get("agent") == "scribe" and r.get("output_file") and not r.get("error"):
-                    # Build the workspace-relative path for the download URL
-                    rel_path = f"chat_{sid[:8]}/{r['output_file']}"
-                    await ws_send(ws, "scribe_report",
-                                  filename=r["output_file"],
-                                  download_path=rel_path)
+                if r.get("agent") == "scribe" and not r.get("error"):
+                    # Find .md files Scribe created in the session workspace
+                    import glob
+                    md_files = sorted(glob.glob(os.path.join(session_workspace, "*.md")))
+                    for md_path in md_files:
+                        md_name = os.path.basename(md_path)
+                        rel_path = f"chat_{sid[:8]}/{md_name}"
+                        await ws_send(ws, "scribe_report",
+                                      filename=md_name,
+                                      download_path=rel_path)
 
             await ws_send(ws, "phase", phase="done")
 
