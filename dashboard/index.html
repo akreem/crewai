@@ -99,6 +99,30 @@
     padding: 10px 16px; border-top: 1px solid var(--gray-850);
     display: flex; align-items: center; gap: 6px;
     font-size: 11px; color: var(--gray-500);
+    flex-wrap: wrap;
+  }
+  .llm-check-btn {
+    margin-left: auto; padding: 3px 8px;
+    border-radius: 6px; border: 1px solid var(--gray-700);
+    background: var(--gray-800); color: var(--gray-400);
+    font-size: 10px; font-weight: 600; cursor: pointer;
+    transition: background .15s, color .15s;
+  }
+  .llm-check-btn:hover { background: var(--gray-700); color: #fff; }
+  .llm-check-btn.checking { opacity: .5; pointer-events: none; }
+  .llm-status-panel {
+    width: 100%; margin-top: 6px;
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .llm-status-row {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 10px; color: var(--gray-400);
+  }
+  .llm-status-row .dot { width: 5px; height: 5px; }
+  .llm-status-row .llm-name { flex: 1; font-weight: 500; }
+  .llm-status-row .llm-model {
+    color: var(--gray-600); font-size: 9px;
+    max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
   .dot.ok { background: #22c55e; }
@@ -345,6 +369,7 @@
     <div class="sidebar-footer" id="status-badge">
       <span class="dot err"></span>
       <span>Checking agents...</span>
+      <button class="llm-check-btn" onclick="checkLLMs()" title="Test LLM connectivity">LLM Check</button>
     </div>
   </div>
   <div class="main">
@@ -676,9 +701,53 @@ function refreshStatus() {
       var agents = ['watchman','shield','scribe'];
       var online = agents.filter(function(a) { return d[a] && d[a].status === 'ok'; }).length;
       var all = online === agents.length;
-      statusEl.innerHTML = '<span class="dot ' + (all ? 'ok' : online > 0 ? 'warn' : 'err') + '"></span><span>' + (all ? 'All agents online' : online + '/' + agents.length + ' agents online') + '</span>';
+      var badge = statusEl.querySelector('.dot');
+      var label = statusEl.querySelector('span:nth-child(2)');
+      if (badge) badge.className = 'dot ' + (all ? 'ok' : online > 0 ? 'warn' : 'err');
+      if (label) label.textContent = all ? 'All agents online' : online + '/' + agents.length + ' agents online';
     }).catch(function() {
-      statusEl.innerHTML = '<span class="dot err"></span><span>Offline</span>';
+      var badge = statusEl.querySelector('.dot');
+      var label = statusEl.querySelector('span:nth-child(2)');
+      if (badge) badge.className = 'dot err';
+      if (label) label.textContent = 'Offline';
+    });
+}
+
+function checkLLMs() {
+  var btn = statusEl.querySelector('.llm-check-btn');
+  if (btn) { btn.classList.add('checking'); btn.textContent = 'Checking...'; }
+
+  // Remove any previous panel
+  var old = statusEl.querySelector('.llm-status-panel');
+  if (old) old.remove();
+
+  fetch(API + '/status/llm')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var panel = document.createElement('div');
+      panel.className = 'llm-status-panel';
+      var names = ['orchestrator', 'watchman', 'shield', 'scribe'];
+      names.forEach(function(name) {
+        var info = d[name] || {};
+        var ok = info.ok === true;
+        var row = document.createElement('div');
+        row.className = 'llm-status-row';
+        row.innerHTML = '<span class="dot ' + (ok ? 'ok' : 'err') + '"></span>' +
+          '<span class="llm-name">' + esc(name) + '</span>' +
+          '<span class="llm-model" title="' + esc(info.model || '?') + '">' + esc(info.model || '?') + '</span>';
+        if (!ok && info.error) {
+          row.title = info.error;
+        }
+        panel.appendChild(row);
+      });
+      statusEl.appendChild(panel);
+      if (btn) { btn.classList.remove('checking'); btn.textContent = 'LLM Check'; }
+    }).catch(function(e) {
+      var panel = document.createElement('div');
+      panel.className = 'llm-status-panel';
+      panel.innerHTML = '<div class="llm-status-row"><span class="dot err"></span><span>Check failed: ' + esc(e.message || 'error') + '</span></div>';
+      statusEl.appendChild(panel);
+      if (btn) { btn.classList.remove('checking'); btn.textContent = 'LLM Check'; }
     });
 }
 

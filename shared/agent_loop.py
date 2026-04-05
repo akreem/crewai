@@ -33,6 +33,19 @@ def create_llm(base_url: str | None = None, api_key: str | None = None):
     )
 
 
+def ping_llm(client: OpenAI, model: str) -> dict:
+    """Quick LLM connectivity check. Returns {"ok": True/False, ...}."""
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=5,
+        )
+        return {"ok": True, "model": model, "base_url": str(client.base_url)}
+    except Exception as e:
+        return {"ok": False, "model": model, "base_url": str(client.base_url), "error": str(e)}
+
+
 def read_agent_work(file_path: str, workspace: str | None = None) -> dict | None:
     """Read another agent's saved work from the shared workspace."""
     ws = workspace or WORKSPACE

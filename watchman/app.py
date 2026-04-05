@@ -284,3 +284,10 @@ async def run_agent(req: GoalRequest):
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "watchman", "docker": docker_client is not None}
+
+
+@app.get("/health/llm")
+async def health_llm():
+    from shared.agent_loop import ping_llm
+    result = ping_llm(agent.llm, os.getenv("WORKER_LLM_MODEL", "unknown"))
+    return {"service": "watchman", "llm": result}

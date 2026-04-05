@@ -275,3 +275,10 @@ async def health():
         except Exception:
             tools[tool] = "not found"
     return {"status": "ok", "service": "shield", "tools": tools}
+
+
+@app.get("/health/llm")
+async def health_llm():
+    from shared.agent_loop import ping_llm
+    result = ping_llm(agent.llm, os.getenv("WORKER_LLM_MODEL", "unknown"))
+    return {"service": "shield", "llm": result}

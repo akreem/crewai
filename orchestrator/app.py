@@ -188,10 +188,14 @@ questions: What exactly do they want? Which targets? What scope? What matters mo
    NOTE: Scribe is NEVER optional. Always include Scribe in your plan.
 3. CONFIRM — End your plan with a clear question asking the user to confirm. \
 Something like "Ready to execute this plan? Say **go** to proceed."
-4. EXECUTE — Only when the user explicitly confirms (says go, yes, confirm, proceed, \
-do it, execute, start, run it, let's go, approved, etc.), THEN call the delegation tools.
+4. EXECUTE — When the user confirms, IMMEDIATELY call the delegation tools. \
+Do NOT present the plan again. Do NOT ask for confirmation a second time. \
+Any message like "go", "yes", "do it", "execute", "start", "proceed", "run it", \
+"let's go", "approved", "confirmed", "yep", "y", "ok", "go!!", or similar \
+means the user has confirmed. CALL THE TOOLS IMMEDIATELY.
 
 NEVER call delegation tools before the user confirms. Always chat first.
+NEVER re-present the plan after the user says go. Execute it.
 If the user just says "hey" or something casual, respond conversationally and ask \
 what they need help with.
 
@@ -1011,6 +1015,35 @@ async def agent_status():
         except Exception as e:
             statuses[name] = {"status": "unreachable", "error": str(e)}
     return statuses
+
+
+@app.get("/status/llm")
+async def llm_status():
+    """Deep health check — pings every agent's LLM provider and the orchestrator's own."""
+    results = {}
+
+    # Orchestrator's own LLM
+    try:
+        resp = llm.chat.completions.create(
+            model=ORCHESTRATOR_MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=5,
+        )
+        results["orchestrator"] = {"ok": True, "model": ORCHESTRATOR_MODEL, "base_url": ORCHESTRATOR_BASE_URL}
+    except Exception as e:
+        results["orchestrator"] = {"ok": False, "model": ORCHESTRATOR_MODEL, "base_url": ORCHESTRATOR_BASE_URL, "error": str(e)}
+
+    # Worker agents' LLMs
+    for name, info in AGENTS.items():
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as http:
+                r = await http.get(f"{info['url']}/health/llm")
+                data = r.json()
+                results[name] = data.get("llm", data)
+        except Exception as e:
+            results[name] = {"ok": False, "error": str(e)}
+
+    return results
 
 
 @app.get("/health")
