@@ -26,7 +26,9 @@
     color: #eee;
     height: 100vh;
     overflow: hidden;
+    visibility: hidden;
   }
+  body.authed { visibility: visible; }
   .app { display: flex; height: 100vh; }
   .sidebar {
     width: 260px; min-width: 260px;
@@ -1006,8 +1008,11 @@ setInterval(refreshFiles, 30000);
 // Auth: check on load, redirect if not authenticated
 fetch('/auth/check', { credentials: 'same-origin' })
   .then(function(r) { return r.json(); })
-  .then(function(d) { if (!d.authenticated) window.location.href = '/login'; })
-  .catch(function() {});
+  .then(function(d) {
+    if (!d.authenticated) { window.location.href = '/login'; }
+    else { document.body.classList.add('authed'); }
+  })
+  .catch(function() { window.location.href = '/login'; });
 
 function doLogout() {
   fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' })
