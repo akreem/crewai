@@ -542,12 +542,20 @@ async def chat(req: ChatRequest):
                 continue
 
             called_agents.add(agent_name)
+
+            # Auto-merge output files from previously completed agents
+            # so downstream agents can read upstream work even when
+            # the LLM batches multiple tool calls in one round.
+            explicit_deps = args.get("depends_on") or []
+            auto_deps = [f for f in agent_files if f not in explicit_deps]
+            effective_deps = explicit_deps + auto_deps if (explicit_deps or auto_deps) else None
+
             try:
                 receipt = await delegate_to_agent(
                     agent_name,
                     goal=args["goal"],
                     brief=args.get("brief"),
-                    depends_on=args.get("depends_on"),
+                    depends_on=effective_deps,
                     workspace_dir=session_workspace,
                 )
                 agent_reports.append({"agent": agent_name, **receipt})
@@ -776,12 +784,17 @@ async def ws_chat(ws: WebSocket):
                     await ws_send(ws, "agent_start", agent=agent_name,
                                   goal=args.get("goal", ""))
 
+                    # Auto-merge output files from previously completed agents
+                    explicit_deps = args.get("depends_on") or []
+                    auto_deps = [f for f in agent_files if f not in explicit_deps]
+                    effective_deps = explicit_deps + auto_deps if (explicit_deps or auto_deps) else None
+
                     try:
                         receipt = await delegate_to_agent(
                             agent_name,
                             goal=args["goal"],
                             brief=args.get("brief"),
-                            depends_on=args.get("depends_on"),
+                            depends_on=effective_deps,
                             workspace_dir=session_workspace,
                         )
                         report = {"agent": agent_name, **receipt}
