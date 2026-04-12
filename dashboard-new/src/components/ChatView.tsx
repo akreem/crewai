@@ -113,14 +113,34 @@ export default function ChatView() {
   // Load chat on mount or sessionId change
   useEffect(() => {
     if (!sessionId) return
-    fetchJSON<{ title?: string; messages?: ChatMessage[] }>(`/chat/${sessionId}/messages`)
+    fetchJSON<{ title?: string; messages?: ChatMessage[]; agent_reports?: Array<{ agent: string; summary?: string; output_file?: string; error?: string }> }>(`/chat/${sessionId}/messages`)
       .then(d => {
         setCurrentSession(sessionId)
         setTitle(d.title || 'Chat')
-        const items: FeedItem[] = (d.messages || []).map(m => ({
-          type: m.role === 'user' ? 'user' as const : 'assistant' as const,
-          content: m.content,
-        }))
+        const items: FeedItem[] = []
+
+        // Rebuild feed: interleave messages and agent reports
+        const msgs = d.messages || []
+        const reports = d.agent_reports || []
+
+        // Add all user/assistant messages
+        msgs.forEach(m => {
+          items.push({
+            type: m.role === 'user' ? 'user' as const : 'assistant' as const,
+            content: m.content,
+          })
+        })
+
+        // Add agent reports after the messages
+        reports.forEach(r => {
+          if (r.agent === 'scribe' && !r.error && r.output_file) {
+            const relPath = `chat_${sessionId.substring(0, 8)}/${r.output_file.split('/').pop() || r.output_file}`
+            items.push({ type: 'scribe', report: { filename: r.output_file.split('/').pop() || r.output_file, download_path: relPath } })
+          } else {
+            items.push({ type: 'agent', report: { agent: r.agent, summary: r.summary, output_file: r.output_file, error: r.error } })
+          }
+        })
+
         setFeed(items)
         scrollDown()
       })
