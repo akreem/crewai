@@ -1,9 +1,15 @@
 const API = location.origin
 
 export async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API}${path}`, { credentials: 'same-origin', ...init })
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-  return res.json()
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10000)
+  try {
+    const res = await fetch(`${API}${path}`, { credentials: 'same-origin', signal: controller.signal, ...init })
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    return res.json()
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 export async function checkAuth(): Promise<boolean> {
