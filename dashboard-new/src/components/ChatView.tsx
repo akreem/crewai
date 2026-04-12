@@ -133,13 +133,29 @@ export default function ChatView() {
 
         // Add agent reports after the messages
         reports.forEach(r => {
-          if (r.agent === 'scribe' && !r.error && r.output_file) {
-            const relPath = `chat_${sessionId.substring(0, 8)}/${r.output_file.split('/').pop() || r.output_file}`
-            items.push({ type: 'scribe', report: { filename: r.output_file.split('/').pop() || r.output_file, download_path: relPath } })
-          } else {
+          if (r.agent !== 'scribe') {
             items.push({ type: 'agent', report: { agent: r.agent, summary: r.summary, output_file: r.output_file, error: r.error } })
           }
         })
+
+        // Fetch actual .md files from the session workspace for scribe report cards
+        const hasScribe = reports.some(r => r.agent === 'scribe' && !r.error && r.output_file)
+        if (hasScribe) {
+          const sessionDir = `chat_${sessionId.substring(0, 8)}`
+          fetchJSON<{ files?: Array<{ name: string }> }>(`/workspace/files?path=${encodeURIComponent(sessionDir)}`)
+            .then(data => {
+              const mdFiles = (data.files || []).filter(f => f.name.endsWith('.md'))
+              if (mdFiles.length > 0) {
+                const scribeItems: FeedItem[] = mdFiles.map(f => ({
+                  type: 'scribe' as const,
+                  report: { filename: f.name, download_path: `${sessionDir}/${f.name}` },
+                }))
+                setFeed(prev => [...prev, ...scribeItems])
+                scrollDown()
+              }
+            })
+            .catch(() => {})
+        }
 
         setFeed(items)
         scrollDown()
@@ -209,7 +225,7 @@ export default function ChatView() {
                 <div className="welcome-sub">Multi-agent SRE &amp; Security platform. Start a conversation below.</div>
               </div>
             ) : (
-              <MessageFeed feed={feed} typing={typing} />
+              <MessageFeed feed={feed} typing={typing} onViewFile={setViewFile} />
             )}
           </div>
         </div>

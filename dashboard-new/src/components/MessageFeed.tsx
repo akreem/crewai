@@ -105,7 +105,7 @@ function AgentCard({ report }: { report: FeedItem & { type: 'agent' } }) {
   )
 }
 
-function ScribeReportCard({ report }: { report: FeedItem & { type: 'scribe' } }) {
+function ScribeReportCard({ report, onViewFile }: { report: FeedItem & { type: 'scribe' }; onViewFile?: (path: string) => void }) {
   const { filename, download_path } = report.report
   return (
     <div className="report-card">
@@ -133,6 +133,13 @@ function ScribeReportCard({ report }: { report: FeedItem & { type: 'scribe' } })
           </svg>
           Download
         </a>
+        <button className="agent-action-btn" onClick={() => onViewFile?.(download_path)}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+          View
+        </button>
       </div>
     </div>
   )
@@ -170,9 +177,10 @@ function TypingIndicator({ label }: { label: string }) {
 interface Props {
   feed: FeedItem[]
   typing: string | null
+  onViewFile?: (path: string) => void
 }
 
-export default function MessageFeed({ feed, typing }: Props) {
+export default function MessageFeed({ feed, typing, onViewFile }: Props) {
   return (
     <>
       {feed.map((item, i) => {
@@ -190,7 +198,7 @@ export default function MessageFeed({ feed, typing }: Props) {
           case 'agent':
             return <AgentCard key={i} report={item} />
           case 'scribe':
-            return <ScribeReportCard key={i} report={item} />
+            return <ScribeReportCard key={i} report={item} onViewFile={onViewFile} />
           default:
             return null
         }
