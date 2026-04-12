@@ -17,6 +17,7 @@ from shared.agent_loop import AgentLoop
 app = FastAPI(title="Shield Agent")
 
 WORKSPACE = os.getenv("WORKSPACE_DIR", "/app/workspace")
+HOST_GATEWAY = os.getenv("HOST_GATEWAY", "host.docker.internal")
 
 _SAFE_TARGET = re.compile(r"^[a-zA-Z0-9.\-:/_ ]+$")
 
@@ -60,6 +61,17 @@ async def nmap_scan(target: str = "", scan_type: str = "quick", ports: str = "",
         }
     except subprocess.TimeoutExpired:
         return {"error": "Scan timed out (10 min)"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+async def list_docker_images(**kwargs) -> dict:
+    """List Docker images available on the host via docker.sock."""
+    cmd = ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        images = [line.strip() for line in result.stdout.strip().split("\n") if line.strip() and "<none>" not in line]
+        return {"images": images}
     except Exception as e:
         return {"error": str(e)}
 
@@ -130,11 +142,11 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "nmap_scan",
-            "description": "Run an nmap network scan. Use 'quick' for fast recon, 'stealth' for evasive, 'full' for all ports, 'vuln' for vulnerability scripts, 'udp' for UDP.",
+            "description": f"Run an nmap network scan against a target. For host-machine scans, use '{HOST_GATEWAY}' as the target. Use 'quick' for fast recon, 'stealth' for evasive, 'full' for all ports, 'vuln' for vulnerability scripts, 'udp' for UDP.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "target": {"type": "string", "description": "IP, hostname, or CIDR range"},
+                    "target": {"type": "string", "description": f"IP, hostname, or CIDR range. Use '{HOST_GATEWAY}' to scan the Docker host machine."},
                     "scan_type": {"type": "string", "enum": ["quick", "stealth", "full", "vuln", "udp"], "default": "quick"},
                     "ports": {"type": "string", "description": "Specific ports to scan, e.g. '22,80,443' or '1-1000'. Leave empty for profile defaults."},
                 },
@@ -145,12 +157,24 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
+            "name": "list_docker_images",
+            "description": "List all Docker images available on the host machine's Docker daemon. Call this BEFORE trivy_scan to discover which images can be scanned.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "trivy_scan",
-            "description": "Scan a Docker image for known CVEs and vulnerabilities using Trivy",
+            "description": "Scan a Docker image for known CVEs and vulnerabilities using Trivy. Only works on images available on the host Docker daemon. Call list_docker_images first to see available images.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "image": {"type": "string", "description": "Docker image name:tag"},
+                    "image": {"type": "string", "description": "Docker image name:tag — must be an image present on the host. Use list_docker_images to discover available images."},
                 },
                 "required": ["image"],
             },
@@ -204,15 +228,26 @@ TOOLS_SCHEMA = [
 TOOL_FUNCTIONS = {
     "nmap_scan": nmap_scan,
     "trivy_scan": trivy_scan,
+    "list_docker_images": list_docker_images,
     "checkov_scan": checkov_scan,
     "dns_lookup": dns_lookup,
     "check_ssl": check_ssl,
 }
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT = f"""\
 You are the Shield — a senior security engineer running inside an isolated Docker container.
+You are scanning the HOST MACHINE that runs the Docker containers, NOT the container you run in.
 
 You'll receive a mission and a strategic brief from the Tech Lead (Orchestrator).
+
+TARGET RULES (MOST IMPORTANT):
+- For ALL network/port scans (nmap), ALWAYS use "{HOST_GATEWAY}" as the target. \
+  This resolves to the Docker host machine. NEVER scan container names or container IPs.
+- For SSL/TLS checks on services exposed by the host, use "{HOST_GATEWAY}" as the host.
+- For Trivy image scans, first call list_docker_images to see which images exist on the \
+  host's Docker daemon, then scan those real image names. Do NOT guess image names.
+- For DNS lookups, use the actual public domain/hostname if provided in the mission.
+- If the mission provides a specific external IP or hostname, use that instead of {HOST_GATEWAY}.
 
 CRITICAL RULES:
 1. **Do ONLY what the mission asks.** If the mission says "scan port 80", scan port 80. \

@@ -88,10 +88,14 @@ services:
       - LLM_API_KEY=${SHIELD_API_KEY:-${OPENROUTER_API_KEY}}
       - LLM_BASE_URL=${SHIELD_BASE_URL:-https://openrouter.ai/api/v1}
       - WORKER_LLM_MODEL=${SHIELD_LLM_MODEL:-qwen/qwen-2.5-7b-instruct}
+      - HOST_GATEWAY=host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     cap_add:
       - NET_RAW          # nmap needs raw sockets; avoids full privileged mode
     volumes:
       - ./workspace:/app/workspace
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - sentinel-net
 

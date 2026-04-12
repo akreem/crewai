@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { renderMarkdown, parseThoughts, copyToClipboard } from '../lib/utils'
 import type { FeedItem } from '../lib/types'
 import './MessageFeed.css'
@@ -87,20 +87,20 @@ function AgentCard({ report }: { report: FeedItem & { type: 'agent' } }) {
         <div className="agent-dot" />
         <div className="agent-card-name">{agent.toUpperCase()}</div>
         {elapsed && (
-          <span style={{ fontSize: 11, color: 'var(--gray-500)', fontWeight: 400, marginLeft: 'auto' }}>
-            {elapsed}
-          </span>
+          <span className="agent-card-elapsed">{elapsed}</span>
         )}
       </div>
-      <CopyButton getText={() => body} />
       <div className={`agent-card-body ${needsCollapse && !expanded ? 'collapsed' : ''}`}>
         {body}
       </div>
-      {needsCollapse && (
-        <button className="see-more" onClick={() => setExpanded(!expanded)}>
-          {expanded ? 'See less' : 'See more'}
-        </button>
-      )}
+      <div className="agent-card-footer">
+        {needsCollapse && (
+          <button className="see-more" onClick={() => setExpanded(!expanded)}>
+            {expanded ? 'See less' : 'See more'}
+          </button>
+        )}
+        <CopyButton getText={() => body} />
+      </div>
     </div>
   )
 }
@@ -139,13 +139,30 @@ function ScribeReportCard({ report }: { report: FeedItem & { type: 'scribe' } })
 }
 
 function TypingIndicator({ label }: { label: string }) {
+  const [elapsed, setElapsed] = useState(0)
+
+  useEffect(() => {
+    setElapsed(0)
+    const start = Date.now()
+    const id = setInterval(() => setElapsed(Date.now() - start), 100)
+    return () => clearInterval(id)
+  }, [label])
+
+  const secs = Math.floor(elapsed / 1000)
+  const mins = Math.floor(secs / 60)
+  const rem = secs % 60
+  const timeStr = mins > 0 ? `${mins}m ${rem < 10 ? '0' : ''}${rem}s` : `${secs}s`
+
   return (
     <div className="typing-row">
       <div className="msg-avatar assistant-av">S</div>
       <div className="typing-dot-group">
         <span /><span /><span />
       </div>
-      <div className="typing-label">{label}</div>
+      <div className="typing-label">
+        {label}
+        <span className="typing-timer">{timeStr}</span>
+      </div>
     </div>
   )
 }
