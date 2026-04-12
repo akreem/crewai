@@ -61,6 +61,27 @@
   border-color: rgba(255,255,255,.12);
   color: #fff;
 }
+.manage-agents-btn {
+  margin: 0 12px 12px;
+  padding: 9px 16px;
+  background: rgba(124,58,237,.08);
+  border: 1px solid rgba(124,58,237,.2);
+  border-radius: 12px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: all .15s;
+  width: calc(100% - 24px);
+}
+.manage-agents-btn:hover {
+  background: rgba(124,58,237,.15);
+  border-color: rgba(124,58,237,.35);
+}
 .sidebar-label {
   padding: 16px 16px 8px;
   font-size: 10px;

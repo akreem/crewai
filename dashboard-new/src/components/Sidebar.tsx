@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom'
 import { logout } from '../lib/api'
 import { useLLMCheck } from '../hooks/useData'
 import type { Session, FileEntry } from '../lib/types'
@@ -24,6 +25,7 @@ export default function Sidebar({
   files, currentPath, onBrowse, onViewFile,
   agentStatus,
 }: Props) {
+  const nav = useNavigate()
   const { llmStatus, checking, check } = useLLMCheck()
   const allOnline = agentStatus.online === agentStatus.total
   const statusClass = allOnline ? 'ok' : agentStatus.online > 0 ? 'warn' : 'err'
@@ -47,6 +49,16 @@ export default function Sidebar({
           <path d="M12 5v14M5 12h14" />
         </svg>
         New Chat
+      </button>
+
+      <button className="manage-agents-btn" onClick={() => nav('/agents')}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+          <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
+          <circle cx="9" cy="7" r="4" />
+          <path d="M23 21v-2a4 4 0 00-3-3.87" />
+          <path d="M16 3.13a4 4 0 010 7.75" />
+        </svg>
+        Manage Agents
       </button>
 
       <div className="sidebar-label">Recent</div>

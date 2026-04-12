@@ -59,7 +59,7 @@ export interface LLMStatus {
 // Display item for the chat feed
 export type FeedItem =
   | { type: 'user'; content: string }
-  | { type: 'assistant'; content: string }
+  | { type: 'assistant'; content: string; elapsed?: string }
   | { type: 'system'; content: string }
   | { type: 'agent'; report: AgentReport }
   | { type: 'scribe'; report: ScribeReport }

@@ -8,6 +8,7 @@ export default defineConfig({
     proxy: {
       '/auth': 'http://localhost:6000',
       '/chat': 'http://localhost:6000',
+      '/agents': 'http://localhost:6000',
       '/status': 'http://localhost:6000',
       '/workspace': 'http://localhost:6000',
       '/ws': {

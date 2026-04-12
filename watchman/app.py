@@ -286,6 +286,21 @@ async def health():
     return {"status": "ok", "service": "watchman", "docker": docker_client is not None}
 
 
+@app.get("/config")
+async def get_config():
+    return {"name": agent.name, "system_prompt": agent.system_prompt}
+
+
+class PromptUpdate(BaseModel):
+    system_prompt: str | None = None
+
+
+@app.post("/config/prompt")
+async def update_prompt(req: PromptUpdate):
+    agent.update_system_prompt(req.system_prompt)
+    return {"updated": True, "using_default": req.system_prompt is None}
+
+
 @app.get("/health/llm")
 async def health_llm():
     from shared.agent_loop import ping_llm

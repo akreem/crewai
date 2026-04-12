@@ -24,6 +24,10 @@ DEFAULT_BASE_URL = os.getenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
 WORKER_LLM_MODEL = os.getenv("WORKER_LLM_MODEL", os.getenv("LLM_MODEL", "qwen/qwen-2.5-72b-instruct"))
 WORKSPACE = os.getenv("WORKSPACE_DIR", "/app/workspace")
 
+# Max characters of a single tool result to keep in LLM context.
+# Full results are always saved to disk.
+MAX_TOOL_RESULT_CHARS = 4000
+
 
 def create_llm(base_url: str | None = None, api_key: str | None = None):
     return OpenAI(
@@ -77,11 +81,59 @@ class AgentLoop:
         api_key: str | None = None,
     ):
         self.name = name
+        self.default_system_prompt = system_prompt
         self.system_prompt = system_prompt
         self.tools_schema = tools_schema
         self.tool_functions = tool_functions
         self.max_iterations = max_iterations
         self.llm = create_llm(base_url=base_url, api_key=api_key)
+
+    def update_system_prompt(self, prompt: str | None):
+        """Update the system prompt. Pass None to revert to default."""
+        if prompt is None:
+            self.system_prompt = self.default_system_prompt
+        else:
+            self.system_prompt = prompt
+
+    def _save_tool_result(self, workspace: str, tool_name: str, iteration: int, call_idx: int, result_json: str) -> str:
+        """Save a full tool result to disk. Returns the filename."""
+        os.makedirs(workspace, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%H%M%S")
+        filename = f".{self.name}_tool_{call_idx}_{tool_name}_{ts}.json"
+        filepath = os.path.join(workspace, filename)
+        with open(filepath, "w") as f:
+            f.write(result_json)
+        return filename
+
+    @staticmethod
+    def _compress_messages(messages: list) -> list:
+        """
+        Compress message history to fit within context limits.
+        Keeps system + user prompt + last assistant msg, aggressively
+        truncates tool results in the middle.
+        """
+        if len(messages) <= 3:
+            return messages
+
+        compressed = []
+        for m in messages:
+            role = m.role if hasattr(m, "role") else m.get("role")
+            content = m.content if hasattr(m, "content") else m.get("content")
+
+            if role == "tool" and content and len(content) > 500:
+                # Keep just first 500 chars of tool results
+                short = content[:500] + "\n\n... [COMPRESSED — see saved file for full data]"
+                if hasattr(m, "content"):
+                    # OpenAI message object — rebuild as dict
+                    d = {"role": "tool", "tool_call_id": m.tool_call_id if hasattr(m, "tool_call_id") else "", "content": short}
+                    compressed.append(d)
+                else:
+                    compressed.append({**m, "content": short})
+            else:
+                compressed.append(m)
+
+        print(f"[agent_loop] Compressed {len(messages)} messages")
+        return compressed
 
     async def run(
         self,
@@ -160,6 +212,7 @@ class AgentLoop:
         ]
 
         all_tool_results: list[dict] = []
+        tool_result_files: list[str] = []
 
         for i in range(self.max_iterations):
             kwargs = {
@@ -177,6 +230,13 @@ class AgentLoop:
                     resp = self.llm.chat.completions.create(**kwargs)
                     break
                 except Exception as e:
+                    err_str = str(e)
+                    # Context overflow — compress history and retry immediately
+                    if "context length" in err_str or "too many tokens" in err_str.lower() or ("400" in err_str and "token" in err_str):
+                        print(f"[{self.name}] Context overflow detected, compressing history...")
+                        messages = self._compress_messages(messages)
+                        kwargs["messages"] = messages
+                        continue
                     wait = 10 if llm_attempt == 0 else 15
                     print(f"[{self.name}] LLM call attempt {llm_attempt+1} failed: {e}")
                     if llm_attempt < 2:
@@ -205,13 +265,29 @@ class AgentLoop:
                 else:
                     result = {"error": f"Unknown tool: {fn_name}"}
 
-                result_str = json.dumps(result, default=str)
+                # Save full result to disk
+                result_str_full = json.dumps(result, default=str)
+                result_file = self._save_tool_result(
+                    effective_workspace, fn_name, i, len(all_tool_results), result_str_full
+                )
+                tool_result_files.append(result_file)
+
                 all_tool_results.append(
-                    {"tool": fn_name, "args": args, "result": result}
+                    {"tool": fn_name, "args": args, "result": result, "file": result_file}
                 )
 
+                # Truncate for LLM context — keep it lean
+                if len(result_str_full) > MAX_TOOL_RESULT_CHARS:
+                    truncated = result_str_full[:MAX_TOOL_RESULT_CHARS]
+                    context_str = (
+                        f"{truncated}\n\n... [TRUNCATED — full output ({len(result_str_full)} chars) "
+                        f"saved to {result_file}. Analyze what you can see above and continue.]"
+                    )
+                else:
+                    context_str = result_str_full
+
                 messages.append(
-                    {"role": "tool", "tool_call_id": tc.id, "content": result_str}
+                    {"role": "tool", "tool_call_id": tc.id, "content": context_str}
                 )
 
         # Extract final analysis from last assistant message

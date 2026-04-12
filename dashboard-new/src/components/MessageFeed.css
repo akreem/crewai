@@ -60,10 +60,13 @@
 }
 .msg-row.assistant { position: relative; }
 .msg-row.assistant .msg-actions {
-  display: flex; gap: 4px; margin-top: 4px; opacity: 0;
+  display: flex; gap: 8px; align-items: center; margin-top: 4px; opacity: 0;
   transition: opacity .15s;
 }
 .msg-row.assistant:hover .msg-actions { opacity: 1; }
+.msg-elapsed {
+  font-size: 11px; color: var(--gray-500); font-variant-numeric: tabular-nums;
+}
 .copy-btn {
   background: none; border: none; color: var(--gray-500);
   cursor: pointer; padding: 2px 4px; border-radius: 4px;

@@ -19,7 +19,7 @@ import hmac
 import time
 import httpx
 import jwt
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Cookie
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Cookie, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from openai import OpenAI
@@ -130,6 +130,57 @@ AGENTS = {
     "shield": {"url": SHIELD_URL},
     "scribe": {"url": SCRIBE_URL},
 }
+
+# ---------------------------------------------------------------------------
+# Agent identity / configuration — persisted to workspace volume
+# ---------------------------------------------------------------------------
+AGENT_CONFIG_PATH = os.path.join(os.getenv("WORKSPACE_DIR", "/app/workspace"), ".agent_config.json")
+AGENT_AVATARS_DIR = os.path.join(os.getenv("WORKSPACE_DIR", "/app/workspace"), ".agent_avatars")
+
+DEFAULT_AGENT_PROFILES = {
+    "watchman": {
+        "display_name": "Watchman",
+        "avatar": "👁️",
+        "avatar_url": None,
+        "description": "System monitoring & health analysis",
+        "system_prompt_override": None,
+    },
+    "shield": {
+        "display_name": "Shield",
+        "avatar": "🛡️",
+        "avatar_url": None,
+        "description": "Security scanning & vulnerability assessment",
+        "system_prompt_override": None,
+    },
+    "scribe": {
+        "display_name": "Scribe",
+        "avatar": "📝",
+        "avatar_url": None,
+        "description": "Documentation & report generation",
+        "system_prompt_override": None,
+    },
+}
+
+
+def _load_agent_config() -> dict:
+    if os.path.exists(AGENT_CONFIG_PATH):
+        with open(AGENT_CONFIG_PATH, "r") as f:
+            saved = json.load(f)
+        # Merge with defaults for any new agents
+        for name, defaults in DEFAULT_AGENT_PROFILES.items():
+            if name not in saved:
+                saved[name] = dict(defaults)
+        return saved
+    return {name: dict(profile) for name, profile in DEFAULT_AGENT_PROFILES.items()}
+
+
+def _save_agent_config(config: dict):
+    os.makedirs(os.path.dirname(AGENT_CONFIG_PATH), exist_ok=True)
+    with open(AGENT_CONFIG_PATH, "w") as f:
+        json.dump(config, f, indent=2)
+
+
+agent_config = _load_agent_config()
 
 # ---------------------------------------------------------------------------
 # Tool definitions — the Tech Lead delegates with BRIEFS
@@ -1165,6 +1216,161 @@ async def run_command(req: CommandRequest):
         summary = resp.choices[0].message.content or ""
 
     return CommandResponse(plan=plan_text, agent_reports=agent_reports, summary=summary)
+
+
+@app.get("/agents/config")
+async def get_agents_config():
+    """Return all agent profiles (identity, avatar, system prompt override)."""
+    config = _load_agent_config()
+    result = {}
+    for name, profile in config.items():
+        # Fetch live system prompt from the worker
+        live_prompt = None
+        if name in AGENTS:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as http:
+                    r = await http.get(f"{AGENTS[name]['url']}/config")
+                    live_prompt = r.json().get("system_prompt", None)
+            except Exception:
+                pass
+        result[name] = {
+            **profile,
+            "live_system_prompt": live_prompt,
+        }
+    return result
+
+
+class AgentConfigUpdate(BaseModel):
+    display_name: str | None = None
+    avatar: str | None = None
+    description: str | None = None
+    system_prompt_override: str | None = None
+
+
+@app.put("/agents/{agent_name}/config")
+async def update_agent_config(agent_name: str, update: AgentConfigUpdate):
+    """Update an agent's display identity and optionally its system prompt."""
+    config = _load_agent_config()
+    if agent_name not in config:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_name}")
+
+    profile = config[agent_name]
+    if update.display_name is not None:
+        profile["display_name"] = update.display_name
+    if update.avatar is not None:
+        profile["avatar"] = update.avatar
+    if update.description is not None:
+        profile["description"] = update.description
+    if update.system_prompt_override is not None:
+        profile["system_prompt_override"] = update.system_prompt_override
+
+    config[agent_name] = profile
+    _save_agent_config(config)
+
+    # Push system prompt to the worker if it was updated
+    if update.system_prompt_override is not None and agent_name in AGENTS:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as http:
+                await http.post(
+                    f"{AGENTS[agent_name]['url']}/config/prompt",
+                    json={"system_prompt": update.system_prompt_override},
+                )
+        except Exception as e:
+            return {"updated": True, "prompt_push": f"failed: {e}"}
+
+    return {"updated": True}
+
+
+@app.post("/agents/{agent_name}/config/reset-prompt")
+async def reset_agent_prompt(agent_name: str):
+    """Reset an agent's system prompt to its built-in default."""
+    config = _load_agent_config()
+    if agent_name not in config:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_name}")
+
+    config[agent_name]["system_prompt_override"] = None
+    _save_agent_config(config)
+
+    # Tell the worker to revert to default
+    if agent_name in AGENTS:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as http:
+                await http.post(
+                    f"{AGENTS[agent_name]['url']}/config/prompt",
+                    json={"system_prompt": None},
+                )
+        except Exception:
+            pass
+
+    return {"reset": True}
+
+
+ALLOWED_IMG_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+MAX_AVATAR_SIZE = 2 * 1024 * 1024  # 2 MB
+
+
+@app.post("/agents/{agent_name}/avatar")
+async def upload_agent_avatar(agent_name: str, file: UploadFile = File(...)):
+    """Upload a profile picture for an agent."""
+    config = _load_agent_config()
+    if agent_name not in config:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_name}")
+
+    if file.content_type not in ALLOWED_IMG_TYPES:
+        raise HTTPException(status_code=400, detail="Only PNG, JPEG, WebP, and GIF images are allowed")
+
+    data = await file.read()
+    if len(data) > MAX_AVATAR_SIZE:
+        raise HTTPException(status_code=400, detail="Image must be under 2 MB")
+
+    ext = file.filename.rsplit(".", 1)[-1].lower() if file.filename and "." in file.filename else "png"
+    if ext not in ("png", "jpg", "jpeg", "webp", "gif"):
+        ext = "png"
+
+    os.makedirs(AGENT_AVATARS_DIR, exist_ok=True)
+    # Remove old avatar if exists
+    for old in os.listdir(AGENT_AVATARS_DIR):
+        if old.startswith(f"{agent_name}."):
+            os.remove(os.path.join(AGENT_AVATARS_DIR, old))
+
+    filename = f"{agent_name}.{ext}"
+    filepath = os.path.join(AGENT_AVATARS_DIR, filename)
+    with open(filepath, "wb") as f:
+        f.write(data)
+
+    avatar_url = f"/agents/{agent_name}/avatar"
+    config[agent_name]["avatar_url"] = avatar_url
+    _save_agent_config(config)
+
+    return {"avatar_url": avatar_url}
+
+
+@app.get("/agents/{agent_name}/avatar")
+async def get_agent_avatar(agent_name: str):
+    """Serve the agent's uploaded avatar image."""
+    if not os.path.exists(AGENT_AVATARS_DIR):
+        raise HTTPException(status_code=404, detail="No avatar")
+    for f in os.listdir(AGENT_AVATARS_DIR):
+        if f.startswith(f"{agent_name}."):
+            return FileResponse(os.path.join(AGENT_AVATARS_DIR, f))
+    raise HTTPException(status_code=404, detail="No avatar")
+
+
+@app.delete("/agents/{agent_name}/avatar")
+async def delete_agent_avatar(agent_name: str):
+    """Remove the agent's avatar, reverting to emoji."""
+    config = _load_agent_config()
+    if agent_name not in config:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_name}")
+
+    if os.path.exists(AGENT_AVATARS_DIR):
+        for f in os.listdir(AGENT_AVATARS_DIR):
+            if f.startswith(f"{agent_name}."):
+                os.remove(os.path.join(AGENT_AVATARS_DIR, f))
+
+    config[agent_name]["avatar_url"] = None
+    _save_agent_config(config)
+    return {"deleted": True}
 
 
 @app.get("/status")

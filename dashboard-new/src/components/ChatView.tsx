@@ -74,11 +74,13 @@ export default function ChatView() {
         }
         break
 
-      case 'reply':
+      case 'reply': {
+        const elapsed = timerRef.current ? formatElapsed(Date.now() - timerRef.current) : undefined
         setTyping(null)
-        if (ev.content) addFeedItem({ type: 'assistant', content: ev.content })
+        if (ev.content) addFeedItem({ type: 'assistant', content: ev.content, elapsed })
         setSending(false)
         break
+      }
 
       case 'agent_start':
         setTyping(`${(ev.agent || '').toUpperCase()} working`)

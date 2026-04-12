@@ -30,6 +30,41 @@ def _validate(value: str, label: str) -> str | None:
     return None
 
 
+def _summarize_trivy(parsed: dict) -> dict:
+    """Extract a compact summary from trivy JSON — counts + top CVEs per target."""
+    results = parsed.get("Results", [])
+    summary = {"targets": [], "total_vulns": 0}
+    for target in results:
+        vulns = target.get("Vulnerabilities", [])
+        if not vulns:
+            continue
+        counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0}
+        top_cves = []
+        for v in vulns:
+            sev = v.get("Severity", "UNKNOWN")
+            if sev in counts:
+                counts[sev] += 1
+            if len(top_cves) < 10:
+                top_cves.append({
+                    "id": v.get("VulnerabilityID", ""),
+                    "pkg": v.get("PkgName", ""),
+                    "severity": sev,
+                    "title": (v.get("Title") or "")[:100],
+                    "installed": v.get("InstalledVersion", ""),
+                    "fixed": v.get("FixedVersion", ""),
+                })
+        entry = {
+            "target": target.get("Target", ""),
+            "type": target.get("Type", ""),
+            "counts": counts,
+            "total": len(vulns),
+            "top_cves": top_cves,
+        }
+        summary["targets"].append(entry)
+        summary["total_vulns"] += len(vulns)
+    return summary
+
+
 # ---------------------------------------------------------------------------
 # LOCAL TOOLS
 # ---------------------------------------------------------------------------
@@ -49,15 +84,15 @@ async def nmap_scan(target: str = "", scan_type: str = "quick", ports: str = "",
         args = [a for a in args if not a.startswith("--top-ports")]
         args += ["-p", ports]
 
-    cmd = ["nmap", "-oX", "-"] + args + [target]
+    cmd = ["nmap", "-oN", "-"] + args + [target]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         return {
             "target": target,
             "scan_type": scan_type,
             "command": " ".join(cmd),
-            "output": result.stdout[-8000:],
-            "stderr": result.stderr[-1000:] if result.stderr else None,
+            "output": result.stdout[-6000:],
+            "stderr": result.stderr[-500:] if result.stderr else None,
         }
     except subprocess.TimeoutExpired:
         return {"error": "Scan timed out (10 min)"}
@@ -85,9 +120,11 @@ async def trivy_scan(image: str = "", **kwargs) -> dict:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         try:
             parsed = json.loads(result.stdout)
+            # Summarize: only keep vulnerability counts + top findings per target
+            summary = _summarize_trivy(parsed)
+            return {"image": image, "summary": summary, "total_raw_chars": len(result.stdout)}
         except (json.JSONDecodeError, ValueError):
-            parsed = {"raw": result.stdout[-8000:]}
-        return {"image": image, "results": parsed}
+            return {"image": image, "raw": result.stdout[-4000:]}
     except subprocess.TimeoutExpired:
         return {"error": "Trivy scan timed out"}
     except Exception as e:
@@ -105,9 +142,21 @@ async def checkov_scan(path: str = "", **kwargs) -> dict:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         try:
             parsed = json.loads(result.stdout)
+            # Summarize: only counts + failed checks
+            if isinstance(parsed, list):
+                summary = []
+                for section in parsed:
+                    s = section.get("summary", {})
+                    failed = [
+                        {"id": c.get("check_id", ""), "name": (c.get("check_result", {}).get("evaluated_keys") or [c.get("check_id", "")])[0] if isinstance(c, dict) else str(c)}
+                        for c in (section.get("results", {}).get("failed_checks", []))[:15]
+                    ]
+                    summary.append({"check_type": section.get("check_type", ""), "passed": s.get("passed", 0), "failed": s.get("failed", 0), "skipped": s.get("skipped", 0), "top_failures": failed})
+                return {"path": target, "summary": summary}
+            else:
+                return {"path": target, "results": str(parsed)[:4000]}
         except (json.JSONDecodeError, ValueError):
-            parsed = {"raw": result.stdout[-8000:]}
-        return {"path": target, "results": parsed}
+            return {"path": target, "raw": result.stdout[-4000:]}
     except Exception as e:
         return {"error": str(e)}
 
@@ -307,6 +356,21 @@ async def health():
         except Exception:
             tools[tool] = "not found"
     return {"status": "ok", "service": "shield", "tools": tools}
+
+
+@app.get("/config")
+async def get_config():
+    return {"name": agent.name, "system_prompt": agent.system_prompt}
+
+
+class PromptUpdate(BaseModel):
+    system_prompt: str | None = None
+
+
+@app.post("/config/prompt")
+async def update_prompt(req: PromptUpdate):
+    agent.update_system_prompt(req.system_prompt)
+    return {"updated": True, "using_default": req.system_prompt is None}
 
 
 @app.get("/health/llm")

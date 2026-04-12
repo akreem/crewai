@@ -43,7 +43,7 @@ function ThoughtBlock({ text }: { text: string }) {
   )
 }
 
-function AssistantMessage({ content }: { content: string }) {
+function AssistantMessage({ content, elapsed }: { content: string; elapsed?: string }) {
   const contentRef = useRef<HTMLDivElement>(null)
   const parts = parseThoughts(content)
   const plainText = parts.filter(p => p.type === 'text').map(p => p.text).join('').trim()
@@ -61,6 +61,7 @@ function AssistantMessage({ content }: { content: string }) {
           <span dangerouslySetInnerHTML={{ __html: renderMarkdown(plainText) }} />
         </div>
         <div className="msg-actions">
+          {elapsed && <span className="msg-elapsed">{elapsed}</span>}
           <CopyButton getText={() => contentRef.current?.textContent || ''} />
         </div>
       </div>
@@ -192,7 +193,7 @@ export default function MessageFeed({ feed, typing, onViewFile }: Props) {
               </div>
             )
           case 'assistant':
-            return <AssistantMessage key={i} content={item.content} />
+            return <AssistantMessage key={i} content={item.content} elapsed={item.elapsed} />
           case 'system':
             return <div className="system-msg" key={i}>{item.content}</div>
           case 'agent':
