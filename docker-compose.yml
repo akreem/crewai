@@ -14,6 +14,8 @@ services:
     depends_on:
       dashboard:
         condition: service_started
+      dashboard-new:
+        condition: service_started
       orchestrator:
         condition: service_started
 
@@ -25,13 +27,11 @@ services:
     networks:
       - sentinel-net
 
-  # ── Dashboard (React) – modernized UI (testing on port 3000) ──
+  # ── Dashboard (React) – modernized UI ──
   dashboard-new:
     build:
       context: .
       dockerfile: dashboard-new/Dockerfile
-    ports:
-      - "3000:80"
     networks:
       - sentinel-net
 
