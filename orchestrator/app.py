@@ -138,6 +138,13 @@ AGENT_CONFIG_PATH = os.path.join(os.getenv("WORKSPACE_DIR", "/app/workspace"), "
 AGENT_AVATARS_DIR = os.path.join(os.getenv("WORKSPACE_DIR", "/app/workspace"), ".agent_avatars")
 
 DEFAULT_AGENT_PROFILES = {
+    "orchestrator": {
+        "display_name": "Orchestrator",
+        "avatar": "🧠",
+        "avatar_url": None,
+        "description": "Strategic coordinator — plans & delegates to specialist agents",
+        "system_prompt_override": None,
+    },
     "watchman": {
         "display_name": "Watchman",
         "avatar": "👁️",
@@ -369,6 +376,32 @@ CRITICAL RULES:
 After all agents report, provide YOUR executive summary as the Tech Lead.
 """
 
+DEFAULT_ORCHESTRATOR_PROMPT = SYSTEM_PROMPT
+
+# In-memory cache so we don't hit disk on every request
+_active_orchestrator_prompt: str = DEFAULT_ORCHESTRATOR_PROMPT
+
+
+def _sync_orchestrator_prompt_cache():
+    """Refresh the in-memory orchestrator prompt from the persisted config."""
+    global _active_orchestrator_prompt
+    config = _load_agent_config()
+    override = config.get("orchestrator", {}).get("system_prompt_override")
+    _active_orchestrator_prompt = override if override else DEFAULT_ORCHESTRATOR_PROMPT
+
+
+def _get_orchestrator_prompt() -> str:
+    """Return the cached active orchestrator system prompt."""
+    return _active_orchestrator_prompt
+
+
+def _update_live_sessions_prompt(new_prompt: str):
+    """Hot-swap the system message in every in-memory session."""
+    for session in sessions.values():
+        msgs = session.get("messages", [])
+        if msgs and isinstance(msgs[0], dict) and msgs[0].get("role") == "system":
+            msgs[0]["content"] = new_prompt
+
 
 # ---------------------------------------------------------------------------
 # Session store — persisted to workspace volume as JSON
@@ -441,7 +474,7 @@ def _load_all_sessions():
             continue
         data = _load_session(sid)
         if data:
-            messages = [{"role": "system", "content": SYSTEM_PROMPT}] + data.get("messages", [])
+            messages = [{"role": "system", "content": _get_orchestrator_prompt()}] + data.get("messages", [])
             sessions[sid] = {
                 "messages": messages,
                 "agent_reports": data.get("agent_reports", []),
@@ -454,6 +487,7 @@ def _load_all_sessions():
 
 
 # Load existing sessions on startup
+_sync_orchestrator_prompt_cache()   # warm the cache before loading sessions
 _load_all_sessions()
 
 
@@ -465,7 +499,7 @@ def get_or_create_session(session_id: str | None) -> tuple[str, list]:
     sid = session_id or str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     sessions[sid] = {
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT}],
+        "messages": [{"role": "system", "content": _get_orchestrator_prompt()}],
         "agent_reports": [],
         "agent_files": [],
         "phase": "chat",
@@ -1026,7 +1060,7 @@ async def get_session_messages(session_id: str):
         if not data:
             raise HTTPException(status_code=404, detail="Session not found")
         # Reconstruct into memory
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + data.get("messages", [])
+        messages = [{"role": "system", "content": _get_orchestrator_prompt()}] + data.get("messages", [])
         sessions[session_id] = {
             "messages": messages,
             "agent_reports": data.get("agent_reports", []),
@@ -1077,7 +1111,7 @@ class CommandResponse(BaseModel):
 async def run_command(req: CommandRequest):
     # Legacy: direct execution without chat
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": _get_orchestrator_prompt()},
         {"role": "user", "content": req.command},
     ]
 
@@ -1224,9 +1258,11 @@ async def get_agents_config():
     config = _load_agent_config()
     result = {}
     for name, profile in config.items():
-        # Fetch live system prompt from the worker
+        # Fetch live system prompt from the worker (or locally for orchestrator)
         live_prompt = None
-        if name in AGENTS:
+        if name == "orchestrator":
+            live_prompt = _get_orchestrator_prompt()
+        elif name in AGENTS:
             try:
                 async with httpx.AsyncClient(timeout=5.0) as http:
                     r = await http.get(f"{AGENTS[name]['url']}/config")
@@ -1267,16 +1303,20 @@ async def update_agent_config(agent_name: str, update: AgentConfigUpdate):
     config[agent_name] = profile
     _save_agent_config(config)
 
-    # Push system prompt to the worker if it was updated
-    if update.system_prompt_override is not None and agent_name in AGENTS:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as http:
-                await http.post(
-                    f"{AGENTS[agent_name]['url']}/config/prompt",
-                    json={"system_prompt": update.system_prompt_override},
-                )
-        except Exception as e:
-            return {"updated": True, "prompt_push": f"failed: {e}"}
+    # Push system prompt to the worker if it was updated (orchestrator is local)
+    if update.system_prompt_override is not None:
+        if agent_name == "orchestrator":
+            _sync_orchestrator_prompt_cache()
+            _update_live_sessions_prompt(_active_orchestrator_prompt)
+        elif agent_name in AGENTS:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as http:
+                    await http.post(
+                        f"{AGENTS[agent_name]['url']}/config/prompt",
+                        json={"system_prompt": update.system_prompt_override},
+                    )
+            except Exception as e:
+                return {"updated": True, "prompt_push": f"failed: {e}"}
 
     return {"updated": True}
 
@@ -1291,8 +1331,11 @@ async def reset_agent_prompt(agent_name: str):
     config[agent_name]["system_prompt_override"] = None
     _save_agent_config(config)
 
-    # Tell the worker to revert to default
-    if agent_name in AGENTS:
+    # Tell the worker to revert to default (orchestrator handled in-process)
+    if agent_name == "orchestrator":
+        _sync_orchestrator_prompt_cache()
+        _update_live_sessions_prompt(_active_orchestrator_prompt)
+    elif agent_name in AGENTS:
         try:
             async with httpx.AsyncClient(timeout=10.0) as http:
                 await http.post(

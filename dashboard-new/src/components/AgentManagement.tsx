@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { fetchJSON } from '../lib/api'
+import { useAgentStatusMap } from '../hooks/useData'
 import './AgentManagement.css'
 
 interface AgentProfile {
@@ -30,7 +31,9 @@ export default function AgentManagement() {
   const [showAvatarPicker, setShowAvatarPicker] = useState(false)
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [avatarVer, setAvatarVer] = useState(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const agentStatus = useAgentStatusMap()
 
   const loadConfigs = useCallback(() => {
     setLoading(true)
@@ -119,6 +122,7 @@ export default function AgentManagement() {
         credentials: 'same-origin',
       })
       if (!res.ok) throw new Error('Upload failed')
+      setAvatarVer(v => v + 1)
       loadConfigs()
     } catch (e) {
       console.error('Avatar upload failed', e)
@@ -130,13 +134,14 @@ export default function AgentManagement() {
   async function removeAvatar(name: string) {
     try {
       await fetchJSON(`/agents/${name}/avatar`, { method: 'DELETE' })
+      setAvatarVer(v => v + 1)
       loadConfigs()
     } catch (e) {
       console.error('Failed to remove avatar', e)
     }
   }
 
-  const agentOrder = ['watchman', 'shield', 'scribe']
+  const agentOrder = ['orchestrator', 'watchman', 'shield', 'scribe']
   const sortedAgents = agentOrder.filter(n => n in configs)
 
   return (
@@ -167,9 +172,10 @@ export default function AgentManagement() {
                     <div className="agent-profile-top">
                       <div className="agent-profile-avatar">
                         {profile.avatar_url
-                          ? <img src={`${profile.avatar_url}?t=${Date.now()}`} alt={profile.display_name} />
+                          ? <img src={`${profile.avatar_url}?v=${avatarVer}`} alt={profile.display_name} />
                           : profile.avatar
                         }
+                        <span className={`status-dot ${agentStatus[name] ? 'online' : 'offline'}`} />
                       </div>
                       <div className="agent-profile-info">
                         <h2>{profile.display_name}</h2>
@@ -207,7 +213,7 @@ export default function AgentManagement() {
                         <div className="agent-edit-avatar-group">
                           <div className="agent-edit-avatar-preview">
                             {configs[name].avatar_url
-                              ? <img src={`${configs[name].avatar_url}?t=${Date.now()}`} alt="" />
+                              ? <img src={`${configs[name].avatar_url}?v=${avatarVer}`} alt="" />
                               : <span>{editForm.avatar}</span>
                             }
                           </div>

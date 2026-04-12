@@ -58,6 +58,31 @@ export function useAgentStatus() {
   return status
 }
 
+/** Per-agent online/offline status map */
+export function useAgentStatusMap() {
+  const [statusMap, setStatusMap] = useState<Record<string, boolean>>({})
+
+  const refresh = useCallback(() => {
+    fetchJSON<StatusResponse>('/status')
+      .then(d => {
+        const map: Record<string, boolean> = { orchestrator: true }
+        for (const name of ['watchman', 'shield', 'scribe'] as const) {
+          map[name] = d[name]?.status === 'ok'
+        }
+        setStatusMap(map)
+      })
+      .catch(() => setStatusMap({}))
+  }, [])
+
+  useEffect(() => {
+    refresh()
+    const id = setInterval(refresh, 15000)
+    return () => clearInterval(id)
+  }, [refresh])
+
+  return statusMap
+}
+
 export function useLLMCheck() {
   const [llmStatus, setLLMStatus] = useState<LLMStatus | null>(null)
   const [checking, setChecking] = useState(false)
