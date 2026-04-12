@@ -35,6 +35,9 @@ export default function ChatView() {
     })
   }, [])
 
+  // Auto-scroll when typing indicator or feed changes
+  useEffect(() => { scrollDown() }, [typing, feed, scrollDown])
+
   const addFeedItem = useCallback((item: FeedItem) => {
     setFeed(prev => [...prev, item])
     scrollDown()
