@@ -1,31 +1,52 @@
 .app { display: flex; height: 100vh; }
 .main {
   flex: 1; display: flex; flex-direction: column;
-  overflow: hidden; min-width: 0; background: var(--gray-950);
+  overflow: hidden; min-width: 0;
+  background: var(--gray-950);
 }
 .topbar {
-  height: 48px; display: flex; align-items: center;
-  padding: 0 16px; gap: 8px; flex-shrink: 0;
+  height: 52px; display: flex; align-items: center;
+  padding: 0 20px; gap: 10px; flex-shrink: 0;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+  background: rgba(20,20,20,.8);
+  backdrop-filter: blur(12px);
 }
 .toggle-sidebar {
-  width: 34px; height: 34px;
+  width: 36px; height: 36px;
   display: flex; align-items: center; justify-content: center;
-  border-radius: 8px; border: none;
+  border-radius: 10px; border: none;
   background: transparent; color: var(--gray-400);
   cursor: pointer; font-size: 18px;
+  transition: all .15s;
 }
-.toggle-sidebar:hover { background: var(--gray-800); color: #fff; }
-.topbar-title { font-size: 14px; font-weight: 500; color: var(--gray-300); }
-.messages { flex: 1; overflow-y: auto; padding: 0; }
+.toggle-sidebar:hover { background: rgba(255,255,255,.08); color: #fff; }
+.topbar-title {
+  font-size: 14px; font-weight: 600; color: var(--gray-300);
+  letter-spacing: -0.01em;
+}
+.messages {
+  flex: 1; overflow-y: auto; padding: 0;
+  background: linear-gradient(180deg, var(--gray-950) 0%, rgba(20,20,20,1) 100%);
+}
 .messages-inner {
-  max-width: 48rem; margin: 0 auto;
-  padding: 24px 20px 16px;
-  display: flex; flex-direction: column; gap: 24px;
+  max-width: 52rem; margin: 0 auto;
+  padding: 32px 24px 20px;
+  display: flex; flex-direction: column; gap: 28px;
 }
 .welcome {
   flex: 1; display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  gap: 16px; color: var(--gray-500); padding: 40px;
+  gap: 20px; color: var(--gray-500); padding: 60px 40px;
 }
-.welcome-title { font-size: 28px; font-weight: 700; color: #fff; }
-.welcome-sub { font-size: 14px; color: var(--gray-500); }
+.welcome-title {
+  font-size: 36px; font-weight: 700;
+  background: linear-gradient(135deg, #fff 0%, var(--gray-400) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: -0.03em;
+}
+.welcome-sub {
+  font-size: 15px; color: var(--gray-500);
+  max-width: 400px; text-align: center; line-height: 1.6;
+}
