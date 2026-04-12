@@ -25,6 +25,16 @@ services:
     networks:
       - sentinel-net
 
+  # ── Dashboard (React) – modernized UI (testing on port 3000) ──
+  dashboard-new:
+    build:
+      context: .
+      dockerfile: dashboard-new/Dockerfile
+    ports:
+      - "3000:80"
+    networks:
+      - sentinel-net
+
   # ── Orchestrator (LLM brain, delegates to workers via REST) ──
   orchestrator:
     build:
